@@ -1,0 +1,4 @@
+auth/*.json
+.matrix/
+test_logs/
+node_modules/
