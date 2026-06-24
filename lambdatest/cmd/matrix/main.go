@@ -104,11 +104,14 @@ var artifactBase = "https://api.lambdatest.com/automation/api/v1"
 func main() {
 	flag.Parse()
 
-	cred, err := auth.Resolve(*flagProfile)
-	if err != nil {
-		die("auth: %v", err)
-	}
+	// Resolve auth early but non-fatally — --dry needs no creds; everything that
+	// touches the wire dies on autherr at its point of use.
+	cred, autherr := auth.Resolve(*flagProfile)
+
 	if *flagUpload != "" {
+		if autherr != nil {
+			die("auth: %v", autherr)
+		}
 		fmt.Println("== upload (prereq) ==")
 		runUploads(cred, *flagUpload)
 		return
@@ -152,6 +155,10 @@ func main() {
 		combos = combos[:limit]
 	} else {
 		fmt.Printf("generated %d combos; running all %d\n", full, full)
+	}
+
+	if autherr != nil {
+		die("auth: %v", autherr)
 	}
 
 	// Smoke probe: one cheap known-good combo. If the env is broken, say so.
