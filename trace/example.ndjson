@@ -1,0 +1,6 @@
+{"seq":0,"ts":1782477000000,"session":"s-7af3","mode":"call","dir":"efferent","method":"POST","url":"{web_hub}/session","headers":{"Content-Type":"application/json"},"auth_slot":"basic_header","body":{"capabilities":{"alwaysMatch":{"browserName":"{browser}","browserVersion":"{version}"}}}}
+{"seq":1,"ts":1782477000420,"session":"s-7af3","mode":"call","dir":"afferent","status":200,"body":{"value":{"sessionId":"{sid}","capabilities":{}}}}
+{"seq":2,"ts":1782477000600,"session":"s-7af3","mode":"call","dir":"efferent","method":"POST","url":"{web_hub}/session/{sid}/url","auth_slot":"basic_header","body":{"url":"https://example.com"}}
+{"seq":3,"ts":1782477001100,"session":"s-7af3","mode":"call","dir":"afferent","status":200,"body":{"value":null}}
+{"seq":4,"ts":1782477001300,"session":"s-7af3","mode":"channel","dir":"efferent","command":"Page.navigate","body":{"url":"https://example.com"}}
+{"seq":5,"ts":1782477001950,"session":"s-7af3","mode":"channel","dir":"afferent","event":"Page.loadEventFired","body":{"timestamp":12345.6}}
