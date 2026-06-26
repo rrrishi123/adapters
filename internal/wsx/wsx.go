@@ -1,4 +1,4 @@
-// Package wsx is the second wire physics: the channel.
+// Package wsx is the second wire mode: the channel.
 //
 // httpx is a call — one request, one response, then nothing. wsx is a
 // connection — you produce frames into it and consume frames out of it, and it

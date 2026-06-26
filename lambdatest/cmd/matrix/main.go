@@ -1,6 +1,6 @@
 // cmd/matrix: run the LambdaTest provider matrix over the wire, as a host tool.
 //
-// This is a CONSUMER of http-mcp's two physics, not an extension of them — it
+// This is a CONSUMER of http-mcp's two modes, not an extension of them — it
 // lives beside cmd/probe and cmd/harvest and uses the same internal/httpx +
 // internal/wsx atoms and the same auth resolver. The MCP server stays 3 tools;
 // "run everything" is a host concern, driven by specs/providers data.
@@ -33,9 +33,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rrrishi123/provider-packs/auth"
-	"github.com/rrrishi123/provider-packs/internal/httpx"
-	"github.com/rrrishi123/provider-packs/internal/wsx"
+	"github.com/rrrishi123/adapters/auth"
+	"github.com/rrrishi123/adapters/internal/httpx"
+	"github.com/rrrishi123/adapters/internal/wsx"
 )
 
 // spec is the slice of specs/providers/lambdatest.json this runner needs — the

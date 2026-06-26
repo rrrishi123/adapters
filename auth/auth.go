@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rrrishi123/provider-packs/internal/httpx"
+	"github.com/rrrishi123/adapters/internal/httpx"
 )
 
 type profile struct {

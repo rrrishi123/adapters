@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rrrishi123/provider-packs/internal/httpx"
+	"github.com/rrrishi123/adapters/internal/httpx"
 )
 
 // uploadEndpoint maps a kind to the LT upload URL + the framework 'type' (if any).

@@ -1,7 +1,7 @@
 {
   "provider": "lambdatest",
   "aka": ["testmuai"],
-  "_doc": "The provider/framework matrix as DATA — the api-doc->http-mcp mapping, not code. A host runner expands x_axes x frameworks into wire calls: physics picks the tool (http_request | bidi_command), endpoint+caps_template build the target, inject_auth says where the resolved profile credential goes BELOW the boundary. http-mcp stays 3 tools; this is specs/ data, the same discipline as the route priors. Verified live on 2026-06-24 via http_request/bidi_command + auth profile prod:adminltqa.",
+  "_doc": "The provider/framework matrix as DATA — the api-doc->http-mcp mapping, not code. A host runner expands x_axes x frameworks into wire calls: the mode picks the tool (http_request | bidi_command), endpoint+caps_template build the target, inject_auth says where the resolved profile credential goes BELOW the boundary. http-mcp stays 3 tools; this is specs/ data, the same discipline as the route priors. Verified live on 2026-06-24 via http_request/bidi_command + auth profile prod:adminltqa.",
 
   "auth": {
     "kind": "basic",
@@ -29,18 +29,18 @@
 
   "frameworks": {
     "selenium": {
-      "physics": "call", "tool": "http_request", "endpoint": "web_hub", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "endpoint": "web_hub", "inject_auth": "basic_header",
       "create": "POST /session",
       "caps_template": {"browserName": "{browser}", "browserVersion": "{version}", "LT:Options": {"platformName": "{platform}", "w3c": true, "video": true}},
       "verified": "matrix-selenium-{chrome-win11, firefox-win10, edge-win11, chrome-macos} — passed"
     },
     "selenium-bidi": {
-      "physics": "call+channel", "tool": "http_request + bidi_command", "endpoint": "web_hub", "inject_auth": "basic_header",
+      "mode": "call+channel", "tool": "http_request + bidi_command", "endpoint": "web_hub", "inject_auth": "basic_header",
       "caps_template": {"browserName": "{browser}", "browserVersion": "{version}", "LT:Options": {"platformName": "{platform}", "w3c": true}, "webSocketUrl": true},
       "note": "session created over HTTP (CALL); webSocketUrl:true returns a BiDi ws (CHANNEL) for bidi_command. se:cdp gives raw CDP on the same session."
     },
     "appium": {
-      "physics": "call", "tool": "http_request", "endpoint": "mobile_hub", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "endpoint": "mobile_hub", "inject_auth": "basic_header",
       "create": "POST /session",
       "caps_template": {"platformName": "{platform}", "appium:deviceName": "{device}", "appium:platformVersion": "{mobile_version}", "appium:isRealMobile": "{rd_vd}", "appium:app": "lt://{app_id}", "LT:Options": {"w3c": true, "video": true}},
       "prereq": "app uploaded -> lt://<app_id> (GET apps_api?type=android|ios)",
@@ -48,14 +48,14 @@
       "verified": "wire-CALL-appium-vd-validate — apk_arena (com.example.apk_arena) on Galaxy S22 emulator, passed"
     },
     "puppeteer": {
-      "physics": "channel", "tool": "bidi_command", "endpoint": "cdp", "inject_auth": "caps_url",
+      "mode": "channel", "tool": "bidi_command", "endpoint": "cdp", "inject_auth": "caps_url",
       "connect": "wss://cdp.lambdatest.com/puppeteer?capabilities=<urlencoded caps>",
       "caps_template": {"browserName": "{browser}", "browserVersion": "{version}", "LT:Options": {"platform": "{platform}"}},
       "note": "raw CDP — bidi_command drives it; timeout_ms >= 60000 for cold-start.",
       "verified": "wire-CHANNEL-cdp-validate — Browser.getVersion -> Chrome/149, completed"
     },
     "playwright": {
-      "physics": "channel", "tool": "host-adapter", "endpoint": "cdp", "inject_auth": "caps_url",
+      "mode": "channel", "tool": "host-adapter", "endpoint": "cdp", "inject_auth": "caps_url",
       "connect": "wss://cdp.lambdatest.com/playwright?capabilities=<urlencoded caps>",
       "browsers": ["pw-chromium", "pw-firefox", "pw-webkit", "Chrome", "MicrosoftEdge"],
       "caps_template": {"browserName": "Chrome", "browserVersion": "latest", "LT:Options": {"platform": "{platform}", "build": "{build}", "name": "{name}", "network": true, "video": true}},
@@ -63,7 +63,7 @@
       "note": "TESTED from the wire 2026-06-24, twice (bidi_command AND cmd/matrix via wsx.DialWithHeaders): dial to /playwright -> HTTP 400 on the WS UPGRADE (NOT 401 — caps/auth accepted). ROOT CAUSE (reverse-engineered from playwright-core lib/client/browserType.js + webSocket.js): browserType.connect sets ONLY header x-playwright-browser, then connectOverWebSocket uses transport = localUtils ? JsonPipeTransport : WebSocketTransport. The Node runner (LTQAPlaywrightCucumber) has localUtils -> JsonPipeTransport spawns Playwright's LOCAL DRIVER PROCESS, and the DRIVER opens the ws with its full handshake (perMessageDeflate offer, framing). The direct WebSocketTransport path is `new window.WebSocket(wsEndpoint)` (browser WS, in-page use, cannot set headers). So x-playwright-browser is NECESSARY-NOT-SUFFICIENT: the LT /playwright gateway expects the driver's handshake, which a raw wsx upgrade cannot reproduce. CONCLUSION: playwright (desktop-web AND rd-web) requires the Playwright RUNTIME/DRIVER in the host (8/pilot) — the wire cannot BE a Playwright driver without becoming a framework (violates lean). Contrast puppeteer: /puppeteer is raw CDP, opens over wsx with no special handshake. The generic ws-upgrade-headers feature (bidi_command headers) stays — useful for any channel that gates on a simple header — it just cannot substitute for the Playwright driver. For the raw-CDP path use the puppeteer entry."
     },
     "cypress": {
-      "physics": "call", "tool": "http_request", "endpoint": "automation_api", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "endpoint": "automation_api", "inject_auth": "basic_header",
       "_doc": "A wire CALL (job submission), NOT a live remote-control and NOT un-runnable. `lambdatest-cypress run --lcf lambdatest-config` (the lambdatest-cypress-cli) zips the cypress project and POSTs it with the config, returning {build_id, session_id} — see LTQAAutomationCypress/cypress10/lambdatest_run.json ({build_id:4329966, session_id:...}). So http_request CAN run it given (a) a zipped project payload and (b) the CLI's upload+build endpoint (internal to the cli, not in the public api-doc; the api-doc exposes only the GET result endpoints below). The CLI is just a wrapper over that POST. Verified the run shape from LTQAAutomationCypress 2026-06-24.",
       "run_command": "lambdatest-cypress run --lcf lambdatest-config",
       "config_shape": {"browsers": [{"browser": "Chrome", "platform": "Windows 10", "versions": ["latest"]}], "run_settings": {"build_name": "...", "parallels": 2, "network": true, "cypress_version": "10.11.0", "specs": "cypress/e2e/*.cy.js"}, "tunnel_settings": {"tunnel": false}},
@@ -76,13 +76,13 @@
       }
     },
     "_smartui_build_status": {
-      "physics": "call", "tool": "http_request", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "inject_auth": "basic_header",
       "endpoint": "GET https://api.lambdatest.com/automation/smart-ui/build/status",
       "response": {"data": {"changesFound": 2, "approved": 3, "underReview": 0, "rejected": 0, "buildId": "<uuid>", "buildName": "<name>", "buildStatus": "Changes Need Approval"}, "status": "success"},
       "note": "visual-diff build status (NOT the espresso/xcui framework build status). Captured from public api-doc 2026-06-24."
     },
     "espresso": {
-      "physics": "call", "tool": "http_request", "endpoint": "framework_build", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "endpoint": "framework_build", "inject_auth": "basic_header",
       "_doc": "native Android instrumented suite. NOT an appium session — a framework BUILD: upload app+testSuite -> POST a build -> poll status. Endpoint mapped from public api-doc (channel, 2026-06-24); host corrected to mobile-api after manual-api 500'd; RUN-verified via http-mcp prod:adminltqa.",
       "prereq_upload": "POST framework_upload (multipart) appFile=<.apk>, type=espresso-android, name=<label> -> returns lt://APP... for both the app and the test suite",
       "create": "POST /v1/espresso/build",
@@ -96,7 +96,7 @@
       "known_ids": {"espressoMyApp": "lt://APP1016062831782302928082971", "espressoMyTestApp": "lt://APP1016044271782302930059141"}
     },
     "xcuitest": {
-      "physics": "call", "tool": "http_request", "endpoint": "framework_build", "inject_auth": "basic_header",
+      "mode": "call", "tool": "http_request", "endpoint": "framework_build", "inject_auth": "basic_header",
       "_doc": "native iOS XCUITest suite — exact sibling of espresso (public api-doc: 'Execute XCUI test on the LambdaTest platform (Server 3)'). Same host correction (mobile-api).",
       "prereq_upload": "POST framework_upload (multipart) appFile=<.ipa/.zip>, type=xcuit-ios, name=<label> -> lt://APP...",
       "create": "POST /v1/xcui/build",

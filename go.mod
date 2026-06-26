@@ -1,3 +1,3 @@
-module github.com/rrrishi123/provider-packs
+module github.com/rrrishi123/adapters
 
 go 1.25
