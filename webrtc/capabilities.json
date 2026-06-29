@@ -1,0 +1,17 @@
+{
+  "$comment": "Per-dialect capability descriptor. Read after the http-mcp `transports` tool flags WebRTC as adapter-provided. This is the clearest case of a capability-shaped transport.",
+  "transport": "webrtc",
+  "status": "needs-adapter",
+  "maps_to": {
+    "signaling": "CALL (http_request) — exchange SDP offer/answer + ICE candidates over a plain HTTP endpoint",
+    "datachannel": "CHANNEL (bidi_command-like) — the negotiated DataChannel carries raw bytes once the handshake completes",
+    "media": "CHANNEL (afferent) — SRTP media stream, consumed like SSE/MJPEG"
+  },
+  "capability_shaped": [
+    "SDP offer/answer negotiation",
+    "ICE candidate gathering + NAT traversal",
+    "DTLS-SRTP key exchange / encryption handshake"
+  ],
+  "why_not_wire": "SDP/ICE/DTLS negotiation is session capability, not a byte transport. The adapter does the handshake (signaled over an httpx CALL); only the resulting DataChannel/media is wire-like. The wire never sees SDP.",
+  "wire_atoms": ["http_request", "bidi_command"]
+}

@@ -1,0 +1,16 @@
+{
+  "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp `transports` tool tells it gRPC is adapter-provided. Declares how this dialect maps down onto the wire's two atoms.",
+  "transport": "grpc",
+  "status": "needs-adapter",
+  "maps_to": {
+    "unary": "CALL (http_request) — request/response over HTTP/2",
+    "server_stream": "CHANNEL (bidi_command) — long-lived stream over HTTP/2"
+  },
+  "capability_shaped": [
+    "protobuf message framing (length-prefixed)",
+    ".proto service/method definitions",
+    "HTTP/2 trailers + status codes"
+  ],
+  "why_not_wire": "The .proto and length-prefixed framing are application semantics, not raw bytes. Putting HTTP/2+protobuf in the wire would break stdlib-only leanness, so the adapter owns them and presents CALL/CHANNEL upward.",
+  "wire_atoms": ["http_request", "bidi_command"]
+}

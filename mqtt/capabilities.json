@@ -1,0 +1,16 @@
+{
+  "$comment": "Per-dialect capability descriptor. Read after the http-mcp `transports` tool flags MQTT as adapter-provided.",
+  "transport": "mqtt",
+  "status": "needs-adapter",
+  "maps_to": {
+    "subscribe": "CHANNEL (bidi_command) — a long-lived connection to the broker; messages arrive as channel frames",
+    "publish": "CALL (http_request semantics) — fire one message into a topic"
+  },
+  "capability_shaped": [
+    "topic hierarchy + wildcard routing",
+    "QoS levels (0/1/2) + delivery guarantees",
+    "retain flag, last-will, keep-alive"
+  ],
+  "why_not_wire": "Topic routing and QoS are application-level delivery logic, not a transport shape. The adapter holds the broker connection and exposes CHANNEL frames; the wire never learns about topics.",
+  "wire_atoms": ["bidi_command", "http_request"]
+}
