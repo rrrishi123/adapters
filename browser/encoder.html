@@ -16,7 +16,8 @@
   content window owns the DOM-only pipeline that the parent can't:
 
       ImageBitmap  ->  <canvas>  ->  canvas.captureStream(fps)  ->  MediaRecorder
-      (VP9, VIDEO-ONLY — Bug 1376134 audio+canvas leak)  ->  WebM clusters  ->  WS
+      (VP9 if available — VERIFIED 2026-07: this Firefox build only has VP8, so the
+       code falls back; VIDEO-ONLY — Bug 1376134 audio+canvas leak)  ->  WebM  ->  WS
 
   This replaces the leaky captureScreenshot loop: drawSnapshot reuses the canvas
   backing store (overwrite, not allocate), no per-frame base64, no BiDi round-

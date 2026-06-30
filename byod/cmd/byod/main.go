@@ -8,6 +8,7 @@
 //
 //	byod list                  -> discover local devices (adb + go-ios), JSON
 //	byod up --udid <id>        -> bring it up (appium + iproxy) -> RunResult JSON
+//	byod down --udid <id>      -> reclaim the iproxy mjpeg forwarder `up` started
 //
 // Prereqs the HOST guarantees: appium running on --hub (default :4723). For iOS,
 // a valid (non-revoked) signing identity + the WDA build (Xcode once); the
@@ -35,6 +36,12 @@ type RunResult struct {
 	HubURL    string `json:"hub_url"`   // appium base, e.g. http://127.0.0.1:4723
 	Stream    string `json:"stream,omitempty"`
 	Transport string `json:"transport"` // "call" (W3C/Appium over HTTP)
+	// IproxyPID: the iOS mjpeg forwarder MUST outlive this CLI (so the stream
+	// persists for 8 to consume), which makes it an orphan. Surfacing its PID
+	// here hands teardown to the lifecycle owner (pilot, via `byod down`) so it
+	// is reclaimable instead of leaked invisibly. 0/absent on android (adb auto-
+	// forwards, nothing to track).
+	IproxyPID int `json:"iproxy_pid,omitempty"`
 }
 
 type dev struct {
@@ -44,7 +51,7 @@ type dev struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: byod list | byod up --udid <id> [--hub http://127.0.0.1:4723] [--mjpeg 9100] [--team <xcodeOrgId>]")
+		fmt.Fprintln(os.Stderr, "usage: byod list | byod up --udid <id> [--hub http://127.0.0.1:4723] [--mjpeg 9100] [--team <xcodeOrgId>] | byod down --udid <id> [--mjpeg 9101] [--pid <iproxy_pid>]")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -65,9 +72,36 @@ func main() {
 			fail(err.Error())
 		}
 		emit(rr)
+	case "down":
+		fs := flag.NewFlagSet("down", flag.ExitOnError)
+		udid := fs.String("udid", "", "device udid")
+		mjpeg := fs.Int("mjpeg", 0, "host mjpeg port (default 9101 ios)")
+		pid := fs.Int("pid", 0, "iproxy pid from `up` (optional; else match by port)")
+		fs.Parse(os.Args[2:])
+		emit(down(*udid, *mjpeg, *pid))
 	default:
 		fail("unknown command " + os.Args[1])
 	}
+}
+
+// down — reclaim the mjpeg forwarder `up` left running (it must outlive `up`, so
+// it is an orphan by design). The lifecycle owner (pilot) calls this to tear it
+// down instead of leaking it indefinitely. Idempotent: by PID if given, and
+// always by the same port pattern `up` uses as the stable reclaim handle.
+func down(udid string, mjpeg, pid int) map[string]any {
+	if mjpeg == 0 {
+		if mjpeg = map[string]int{"android": 9100, "ios": 9101}[platformOf(udid)]; mjpeg == 0 {
+			mjpeg = 9101 // device may already be gone; assume the iOS default
+		}
+	}
+	res := map[string]any{"udid": udid, "mjpeg": mjpeg}
+	if pid > 0 {
+		if p, err := os.FindProcess(pid); err == nil {
+			res["killed_pid"] = p.Kill() == nil
+		}
+	}
+	res["reclaimed"] = exec.Command("pkill", "-f", fmt.Sprintf("iproxy.*%d:%d", mjpeg, mjpeg)).Run() == nil
+	return res
 }
 
 // discover — the device catalog: every local real device adb + go-ios can see.
@@ -133,6 +167,7 @@ func up(udid, hub string, mjpeg int, team string) (*RunResult, error) {
 	}
 	// iOS does NOT auto-forward the mjpeg (unlike adb) — the iproxy dance is the
 	// BYOD-specific bit that belongs HERE in the adapter, per the peer.
+	iproxyPID := 0
 	if plat == "ios" {
 		exec.Command("pkill", "-f", fmt.Sprintf("iproxy.*%d:%d", mjpeg, mjpeg)).Run()
 		c := exec.Command("iproxy", "-u", udid, fmt.Sprintf("%d:%d", mjpeg, mjpeg))
@@ -140,10 +175,15 @@ func up(udid, hub string, mjpeg int, team string) (*RunResult, error) {
 		if err := c.Start(); err != nil {
 			return nil, fmt.Errorf("iproxy mjpeg forward: %w", err)
 		}
+		// do NOT Wait()/kill: the forward must OUTLIVE this CLI so the stream
+		// persists for 8 to consume. Record the PID so pilot can reclaim it via
+		// `byod down` — trackable orphan, not an invisible leak.
+		iproxyPID = c.Process.Pid
 	}
 	return &RunResult{
 		SessionID: sv.Value.SessionID, Platform: plat, Device: udid,
 		HubURL: hub, Stream: fmt.Sprintf("http://127.0.0.1:%d", mjpeg), Transport: "call",
+		IproxyPID: iproxyPID,
 	}, nil
 }
 
