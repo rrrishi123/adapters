@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>8 · tab encoder</title>
+<!--
+  adapters/browser — the BROWSER pack (symmetric with adapters/byod, the device
+  pack). byod knows how to make a DEVICE produce a stream; this knows how to make
+  a local FIREFOX TAB self-encode one. The WITNESS (8) only CONSUMES + DISPLAYS the
+  result (cockpit <video> + MSE); pilot ORCHESTRATES (start a stream for a tab);
+  http-mcp just CARRIES the WS transport. The capture mechanism lives HERE, in the
+  provider/capability layer — not bloating 8.
+
+  encoder.html — the CONTENT half of the Firefox efficient live-stream (the
+  research + peer verdict). The realm split: the PARENT/chrome context calls
+  WindowGlobalParent.drawSnapshot() (reachable via Marionette /moz/context, the
+  same path /procinfo uses) and postMessages each ImageBitmap here; THIS hidden
+  content window owns the DOM-only pipeline that the parent can't:
+
+      ImageBitmap  ->  <canvas>  ->  canvas.captureStream(fps)  ->  MediaRecorder
+      (VP9, VIDEO-ONLY — Bug 1376134 audio+canvas leak)  ->  WebM clusters  ->  WS
+
+  This replaces the leaky captureScreenshot loop: drawSnapshot reuses the canvas
+  backing store (overwrite, not allocate), no per-frame base64, no BiDi round-
+  trip; the encoder has a BOUNDED internal buffer (encode-and-discard). Parent
+  memory stays flat. Lifecycle (peer's caveat): ONE recorder per focused tab —
+  start() on focus, stop()+release on blur, or you leak encoders.
+
+  Protocol: the parent posts {type:'frame', bitmap} (ImageBitmap, transferred) or
+  {type:'start', session, fps, ws} / {type:'stop'}. Each WebM cluster is sent
+  raw over the WebSocket the collector exposes; the cockpit consumes it via MSE.
+-->
+<style>html,body{margin:0;background:#000}canvas{display:none}</style>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+let rec = null, ws = null, fps = 6, haveSize = false;
+
+function stop() {
+  try { if (rec && rec.state !== 'inactive') rec.stop(); } catch {}
+  try { if (ws) ws.close(); } catch {}
+  rec = null; ws = null; haveSize = false;
+}
+
+function start(session, _fps, wsUrl) {
+  stop();
+  fps = Math.max(1, Math.min(30, _fps || 6));
+  ws = new WebSocket(wsUrl);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    const stream = canvas.captureStream(fps);
+    // VP9 if available, else VP8 — VIDEO ONLY (no audio track: avoids Bug 1376134).
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm;codecs=vp8';
+    rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_000_000 });
+    rec.ondataavailable = (e) => { if (e.data && e.data.size && ws && ws.readyState === 1) e.data.arrayBuffer().then((b) => ws.send(b)); };
+    rec.start(Math.round(1000 / fps)); // emit a cluster each ~frame so it streams continuously
+  };
+  ws.onclose = () => { try { if (rec && rec.state !== 'inactive') rec.stop(); } catch {} rec = null; };
+}
+
+// the parent (chrome context) drives this window via postMessage.
+window.addEventListener('message', (e) => {
+  const m = e.data || {};
+  if (m.type === 'start') return start(m.session, m.fps, m.ws);
+  if (m.type === 'stop') return stop();
+  if (m.type === 'frame' && m.bitmap) {
+    const bmp = m.bitmap;
+    if (!haveSize) { canvas.width = bmp.width; canvas.height = bmp.height; haveSize = true; }
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close && bmp.close(); // free the transferred bitmap immediately (bounded memory)
+  }
+}, false);
+
+// announce readiness so the parent knows the encoder realm is live
+window.opener && window.opener.postMessage({ type: 'encoder-ready' }, '*');
+document.title = '8 · tab encoder (ready)';
+</script>
