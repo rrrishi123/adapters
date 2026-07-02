@@ -1,3 +1,8 @@
+// Package trace defines the NEUTRAL trace -- the contract between 8 (recorder)
+// and adapters (replayer). v0.0.1 review: the replay runner does not yet exist;
+// the LambdaTest matrix runner (lambdatest/cmd/matrix/) does not consume this
+// neutral format -- it hardcodes its own JSON schema. The two should converge.
+//
 // Package trace defines the NEUTRAL, provider-agnostic session trace — the
 // contract between 8 (the witness, which RECORDS) and an adapter's replay runner
 // (which MATERIALIZES the trace into a provider-specific, replayable suite).

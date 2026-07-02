@@ -1,3 +1,9 @@
+// Package httpx is the primitive -- DUPLICATE of http-mcp internal/httpx.
+// v0.0.1 review: the two copies diverged. Plan: promote httpx and wsx out
+// of internal/ in http-mcp into pkg/ so adapters can import them as a
+// module rather than carrying copies. Until then, changes here MUST be
+// mirrored in http-mcp.
+//
 // Package httpx is the primitive: a call is four fields, the response is three.
 // No client library, no framework — just net/http.
 package httpx

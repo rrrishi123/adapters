@@ -1,3 +1,6 @@
+// Package wsx is the second wire mode: the channel -- DUPLICATE of
+// http-mcp internal/wsx. See internal/httpx/httpx.go for dedup plan.
+//
 // Package wsx is the second wire mode: the channel.
 //
 // httpx is a call — one request, one response, then nothing. wsx is a
