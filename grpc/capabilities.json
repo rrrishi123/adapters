@@ -12,5 +12,9 @@
     "HTTP/2 trailers + status codes"
   ],
   "why_not_wire": "The .proto and length-prefixed framing are application semantics, not raw bytes. Putting HTTP/2+protobuf in the wire would break stdlib-only leanness, so the adapter owns them and presents CALL/CHANNEL upward.",
-  "wire_atoms": ["http_request", "bidi_command"]
+  "wire_atoms": [
+    "http_request",
+    "bidi_command"
+  ],
+  "shape_proven_by": "grpc_test.go — unary=CALL, server-stream=CHANNEL over real HTTP/2; own both ends, stdlib (no protoc/grpc-lib). Full protobuf/HPACK/deadlines remain the adapter's job."
 }

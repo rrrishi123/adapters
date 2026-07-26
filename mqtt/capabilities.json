@@ -12,5 +12,9 @@
     "retain flag, last-will, keep-alive"
   ],
   "why_not_wire": "Topic routing and QoS are application-level delivery logic, not a transport shape. The adapter holds the broker connection and exposes CHANNEL frames; the wire never learns about topics.",
-  "wire_atoms": ["bidi_command", "http_request"]
+  "wire_atoms": [
+    "bidi_command",
+    "http_request"
+  ],
+  "shape_proven_by": "mqtt_test.go — subscribe=CHANNEL, publish=CALL over real MQTT 3.1.1 framing; own both ends (broker+client), stdlib. QoS1/2, retain, will remain the adapter's job."
 }

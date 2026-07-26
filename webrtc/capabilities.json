@@ -13,5 +13,9 @@
     "DTLS-SRTP key exchange / encryption handshake"
   ],
   "why_not_wire": "SDP/ICE/DTLS negotiation is session capability, not a byte transport. The adapter does the handshake (signaled over an httpx CALL); only the resulting DataChannel/media is wire-like. The wire never sees SDP.",
-  "wire_atoms": ["http_request", "bidi_command"]
+  "wire_atoms": [
+    "http_request",
+    "bidi_command"
+  ],
+  "shape_proven_by": "webrtc_test.go — SDP offer/answer over a real signaling CALL (the only wire-visible surface); own both ends. DTLS/ICE/SCTP DataChannel interior stays adapter-owned (pion), never seen by the wire."
 }
