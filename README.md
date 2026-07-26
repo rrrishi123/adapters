@@ -2,6 +2,7 @@
 
 > Part of **The Wire** — a four-arm system for protocol-agnostic test automation with record & replay.
 > **This repo is the adapters — the PROVIDERS (4th arm)** — per-provider spec/runner/upload/catalog + record->replay. The 4th arm.
+> **The four arms:** [http-mcp](https://github.com/rrrishi123/http-mcp) (WIRE) · [8](https://github.com/rrrishi123/8) (WITNESS) · [pilot](https://github.com/rrrishi123/pilot) (HOST) · [adapters](https://github.com/rrrishi123/adapters) (ARMS)
 
 ---
 
