@@ -3,4 +3,4 @@ lambdatest/lt-spec-private.json
 .matrix/
 test_logs/
 node_modules/
-loopback
+/loopback
