@@ -1,7 +1,7 @@
 {
   "provider": "lambdatest",
   "aka": ["testmuai"],
-  "_doc": "The provider/framework matrix as DATA — the api-doc->http-mcp mapping, not code. A host runner expands x_axes x frameworks into wire calls: the mode picks the tool (http_request | bidi_command), endpoint+caps_template build the target, inject_auth says where the resolved profile credential goes BELOW the boundary. http-mcp stays 3 tools; this is specs/ data, the same discipline as the route priors. Verified live on 2026-06-24 via http_request/bidi_command + auth profile prod:adminltqa.",
+  "_doc": "The provider/framework matrix as DATA — the api-doc->http-mcp mapping, not code. A host runner expands x_axes x frameworks into wire calls: the mode picks the tool (http_request | bidi_command), endpoint+caps_template build the target, inject_auth says where the resolved profile credential goes BELOW the boundary. http-mcp stays 3 tools; this is specs/ data, the same discipline as the route priors. Verified live via http_request/bidi_command + auth profile <account>.",
 
   "auth": {
     "kind": "basic",
@@ -24,7 +24,7 @@
     "apps_upload": "https://manual-api.lambdatest.com/app/upload/realDevice",
     "framework_upload": "https://manual-api.lambdatest.com/app/uploadFramework",
     "framework_build": "https://mobile-api.lambdatest.com/framework",
-    "_framework_build_host_finding": "VERIFIED 2026-06-24: the public api-doc curl says manual-api.lambdatest.com/framework/v1/espresso/build but that host returns 500 (nginx, cfOrigin) on the build route — manual-api is the UPLOAD host only. The live working build host is mobile-api.lambdatest.com/framework/v1/{espresso,xcui}/build (QA-sanctum prod). Auth (Basic) is accepted on both; only mobile-api routes the build. Run proof: POST mobile-api .../v1/espresso/build via http-mcp prod:adminltqa -> {status:[Success],buildId:[22983015]}, appeared Running on appautomation.lambdatest.com."
+    "_framework_build_host_finding": "VERIFIED 2026-06-24: the public api-doc curl says manual-api.lambdatest.com/framework/v1/espresso/build but that host returns 500 (nginx, cfOrigin) on the build route — manual-api is the UPLOAD host only. The live working build host is mobile-api.lambdatest.com/framework/v1/{espresso,xcui}/build (<env>). Auth (Basic) is accepted on both; only mobile-api routes the build. Run proof: POST mobile-api .../v1/espresso/build via http-mcp <account> -> {status:[Success],buildId:[<build_id>]}, appeared Running on appautomation.lambdatest.com."
   },
 
   "frameworks": {
@@ -64,7 +64,7 @@
     },
     "cypress": {
       "mode": "call", "tool": "http_request", "endpoint": "automation_api", "inject_auth": "basic_header",
-      "_doc": "A wire CALL (job submission), NOT a live remote-control and NOT un-runnable. `lambdatest-cypress run --lcf lambdatest-config` (the lambdatest-cypress-cli) zips the cypress project and POSTs it with the config, returning {build_id, session_id} — see LTQAAutomationCypress/cypress10/lambdatest_run.json ({build_id:4329966, session_id:...}). So http_request CAN run it given (a) a zipped project payload and (b) the CLI's upload+build endpoint (internal to the cli, not in the public api-doc; the api-doc exposes only the GET result endpoints below). The CLI is just a wrapper over that POST. Verified the run shape from LTQAAutomationCypress 2026-06-24.",
+      "_doc": "A wire CALL (job submission), NOT a live remote-control and NOT un-runnable. `lambdatest-cypress run --lcf lambdatest-config` (the lambdatest-cypress-cli) zips the cypress project and POSTs it with the config, returning {build_id, session_id}. So http_request CAN run it given (a) a zipped project payload and (b) the CLI's upload+build endpoint (internal to the cli, not in the public api-doc; the api-doc exposes only the GET result endpoints below). The CLI is just a wrapper over that POST. Verified the run shape from LTQAAutomationCypress 2026-06-24.
       "run_command": "lambdatest-cypress run --lcf lambdatest-config",
       "config_shape": {"browsers": [{"browser": "Chrome", "platform": "Windows 10", "versions": ["latest"]}], "run_settings": {"build_name": "...", "parallels": 2, "network": true, "cypress_version": "10.11.0", "specs": "cypress/e2e/*.cy.js"}, "tunnel_settings": {"tunnel": false}},
       "result_endpoints": {
@@ -83,14 +83,14 @@
     },
     "espresso": {
       "mode": "call", "tool": "http_request", "endpoint": "framework_build", "inject_auth": "basic_header",
-      "_doc": "native Android instrumented suite. NOT an appium session — a framework BUILD: upload app+testSuite -> POST a build -> poll status. Endpoint mapped from public api-doc (channel, 2026-06-24); host corrected to mobile-api after manual-api 500'd; RUN-verified via http-mcp prod:adminltqa.",
+      "_doc": "native Android instrumented suite. NOT an appium session — a framework BUILD: upload app+testSuite -> POST a build -> poll status. Endpoint mapped from public api-doc (channel, 2026-06-24); host corrected to mobile-api after manual-api 500'd; RUN-verified via http-mcp <account>.",
       "prereq_upload": "POST framework_upload (multipart) appFile=<.apk>, type=espresso-android, name=<label> -> returns lt://APP... for both the app and the test suite",
       "create": "POST /v1/espresso/build",
       "url": "https://mobile-api.lambdatest.com/framework/v1/espresso/build",
       "payload_template": {"app": "lt://{app_id}", "testSuite": "lt://{test_suite_id}", "device": ["{device}-{mobile_version}"], "queueTimeout": 600, "idleTimeout": 600, "deviceLog": true, "network": true, "build": "{build_name}", "geoLocation": "{geo}"},
       "response": {"status": ["Success"], "buildId": ["<id>"], "message": [""]},
       "rd_vd": {
-        "espresso-rd": {"_doc": "real-device cloud (api-doc: App Automation API REAL Devices). device names are physical models; the build host is mobile-api/framework/v1/espresso/build.", "verified": "espresso-rd — PASSED 2026-06-24 via http-mcp prod:adminltqa, buildId 22983015, device [Galaxy S23-13], 4 sessions, 1m 13s, seen Passed on appautomation.lambdatest.com (secret stayed below the boundary; auth:{profile} -> basic_header)"},
+        "espresso-rd": {"_doc": "real-device cloud (api-doc: App Automation API REAL Devices). device names are physical models; the build host is mobile-api/framework/v1/espresso/build.", "verified": "espresso-rd — PASSED 2026-06-24 via http-mcp <account>, buildId <build_id>, device [Galaxy S23-13], 4 sessions, 1m 13s, seen Passed on appautomation.lambdatest.com (secret stayed below the boundary; auth:{profile} -> basic_header)"},
         "espresso-vd": {"_doc": "virtual-device cloud (separate api-doc tree: App Automation API VIRTUAL Devices). VD honors different/extra caps and a different device catalog (emulators); same /v1/espresso/build shape but VD device names. TODO: capture the VD doc tree + RUN to verify the bifurcation.", "verified": "pending"}
       },
       "known_ids": {"espressoMyApp": "lt://APP1016062831782302928082971", "espressoMyTestApp": "lt://APP1016044271782302930059141"}
@@ -131,7 +131,7 @@
     "peer_mapping_guidance": "DeepSeek, given the live doc/generator links: no magic endpoint; sitemap is incomplete here (only 5 selenium pages); best systematic lever (find the Docusaurus content repo) is unavailable. Priority for first-class spec entries: 1) ARTIFACT-fetch APIs (video, device logs, network logs, screenshots, XML/mochawesome reports) — the 'miss is the gold' verdict evidence, the connective tissue between efferent run and afferent verdict; 2) build-status/job-details (pass/fail + ids for artifact fetch); 3) device list; 4) app upload; 5) sessions (lazy). TODO: map the artifact APIs next.",
     "verified_curls": {
       "uploadFramework": "POST manual-api.lambdatest.com/app/uploadFramework  -H 'Authorization: Basic <enc>' -H 'Content-Type: multipart/form-data' -F appFile=<file> -F type=espresso-android -F name=<label>",
-      "espresso_build": "POST manual-api.lambdatest.com/framework/v1/espresso/build  -H 'Authorization: Basic <enc>' -H 'Content-Type: application/json' --data '{app,testSuite,device:[],queueTimeout,idleTimeout,deviceLog,network,build,geoLocation}'  -> {status:[Success],buildId:[\"1395514\"],message:[\"\"]}",
+      "espresso_build": "POST manual-api.lambdatest.com/framework/v1/espresso/build  -H 'Authorization: Basic <enc>' -H 'Content-Type: application/json' --data '{app,testSuite,device:[],queueTimeout,idleTimeout,deviceLog,network,build,geoLocation}'  -> {status:[Success],buildId:[\"<build_id>\"],message:[\"\"]}",
       "xcui_build": "POST manual-api.lambdatest.com/framework/v1/xcui/build  (identical shape to espresso_build)"
     }
   },
@@ -171,7 +171,7 @@
       "device": "[\"{name}\"] * parallel_builds — same device name repeated per parallel count; platformVersion is a SEPARATE key (not name-suffixed in this script, though the doc curl uses name-version)",
       "optional": ["isVirtualDevice", "platformVersion", "minorOsVersion", "minorOsVersionEnabled", "privateCloud", "fixedIP (=udid)", "testTimeout", "mitmProxy", "network.har", "tunnel + tunnelIdentifier", "location{lat,long}", "smartUI.project", "smartUI.build", "smartUI.cropNavigationBar", "smartUI.cropStatusBar", "only-testing[]", "<caps key=value>"]
     },
-    "app_inventory_prod_adminltqa": {
+    "app_inventory": {
       "_note": "lt:// app references only — credentials live in the gitignored upload-response JSON / env, never here.",
       "espressoMyApp": "lt://APP1016062831782302928082971  (espresso-android, RD)",
       "espressoMyTestApp": "lt://APP1016044271782302930059141  (espresso-android, RD)",
@@ -181,10 +181,10 @@
       "iosVirtual": "lt://APP10160461961782302936818690  (iOS simulator, VD)"
     },
     "verified_runs": {
-      "espresso-rd": "PASSED buildId 22983015 — [Galaxy S23-13], 4 sessions, 1m13s, appautomation dashboard",
-      "xcui-vd": "RUN via http-mcp prod:adminltqa, ProverbialApp+ProverbialTestApp, isVirtualDevice:true, /v1/xcui/build. buildId 22986617 [iPhone 15-17] -> TIMEOUT (bare-major version matched no simulator); buildId 22987095 [iPhone 15-18.0] -> resubmitted with a valid point version. Lesson: iOS VD device string must carry a point os version from the catalog.",
+      "espresso-rd": "PASSED buildId <build_id> — [Galaxy S23-13], 4 sessions, 1m13s, appautomation dashboard",
+      "xcui-vd": "RUN via http-mcp <account>, ProverbialApp+ProverbialTestApp, isVirtualDevice:true, /v1/xcui/build. buildId <build_id> [iPhone 15-17] -> TIMEOUT (bare-major version matched no simulator); buildId <build_id> [iPhone 15-18.0] -> resubmitted with a valid point version. Lesson: iOS VD device string must carry a point os version from the catalog.",
       "espresso-vd": "NOT runnable with current apps: androidVirtual exists but has no paired emulator test suite",
-      "flutter": "endpoints mapped; no flutter apps uploaded for adminltqa"
+      "flutter": "endpoints mapped; no flutter apps uploaded for <account>"
     }
   },
 
@@ -197,7 +197,7 @@
   },
 
   "matrix_sweep": {
-    "_doc": "run live via http-mcp (the 3 tools only) on prod:adminltqa, build 'http-mcp matrix sweep', 2026-06-24. Secret stayed below the boundary (auth:{profile}). Sessions created + verified + deleted to free parallels; framework builds left to run.",
+    "_doc": "run live via http-mcp (the 3 tools only) on <account>, build 'http-mcp matrix sweep', 2026-06-24. Secret stayed below the boundary (auth:{profile}). Sessions created + verified + deleted to free parallels; framework builds left to run.",
     "selenium": {
       "tool": "http_request (CALL) + bidi_command (CHANNEL for bidi)", "endpoint": "web_hub POST/DELETE /session",
       "ran": ["chrome-latest / Windows 11 (normal)", "firefox-latest / macOS Sonoma (normal)", "MicrosoftEdge-latest / Windows 11 (normal)", "safari-latest / macOS Sonoma (normal)", "chrome-latest / Windows 11 (bidi: webSocketUrl:true)"],
@@ -207,12 +207,12 @@
     "appium": {
       "tool": "http_request (CALL)", "endpoint": "mobile_hub POST/DELETE /session",
       "ran": ["android app VD (Galaxy S23 emu, lt://androidVirtual, UiAutomator2)", "ios app VD (iPhone 15 sim 18.0, lt://iosVirtual, XCUITest)", "android web VD (Galaxy S23 emu, Chrome)", "ios web VD (iPhone 15 sim, safari)", "android web RD (real Samsung SC-51D, Chrome)", "ios web RD (real iPhone 14, safari)"],
-      "axes": "android+ios x app+web x rd+vd — isRealMobile flag picks the pool; RD confirmed real hardware (udid RFCWA0YEZ7P samsung, 00008110-... iPhone)",
+      "axes": "android+ios x app+web x rd+vd — isRealMobile flag picks the pool; RD confirmed real hardware (udid RFCWA0YEZ7P samsung, <udid_prefix> iPhone)",
       "rd_vd_version_nuance": "RD iOS uses bare-major versions (iPhone 14 -> 16,18); VD iOS uses point versions (iPhone 15 -> 18.0). Pull the exact string from lambdatest-catalog per pool."
     },
     "puppeteer": {"tool": "bidi_command (CHANNEL)", "endpoint": "cdp /puppeteer?capabilities=", "ran": ["Chrome-latest / Windows 11 — Browser.getVersion -> Chrome/149.0.7827.197, protocol 1.3"], "inject_auth": "caps_url (LT:Options in ?capabilities=)"},
-    "espresso": {"tool": "http_request (CALL)", "ran": ["espresso-rd PASSED buildId 22983015"]},
-    "xcui": {"tool": "http_request (CALL)", "ran": ["xcui-vd buildId 22987095 [iPhone 15-18.0] Running 5 sessions; v1 [iPhone 15-17] Timeout (bad version)"]},
+    "espresso": {"tool": "http_request (CALL)", "ran": ["espresso-rd PASSED buildId <build_id>"]},
+    "xcui": {"tool": "http_request (CALL)", "ran": ["xcui-vd buildId <build_id> [iPhone 15-18.0] Running 5 sessions; v1 [iPhone 15-17] Timeout (bad version)"]},
     "not_runnable_via_two_tools": {
       "playwright": "TESTED 2026-06-24: bidi_command dial to wss://cdp.lambdatest.com/playwright?capabilities=<caps> with auth:{profile} -> HTTP 400 on the WS upgrade (NOT 401 — auth accepted; the upgrade handshake itself is refused). Playwright's connect sends client-specific handshake headers a generic ws can't. Needs a host Playwright client (8/pilot). Same for playwright-rd-web.",
       "cypress": "RECLASSIFIED: it IS a wire CALL, not un-runnable — `lambdatest-cypress run` zips the project + POSTs -> {build_id, session_id}. http_request can submit it given a zipped project + the cli's upload/build endpoint (not in public api-doc). Did not fire it this sweep: requires assembling a cypress project zip first. A job submission, not a live session."
@@ -233,5 +233,5 @@
       "version_format": "iOS VD versions are POINT versions (17.0, 18.0, 18.5, 26.0) — NOT bare major (17). A device string like 'iPhone 15-17' may not match a simulator; use 'iPhone 15-18.0'."
     },
     "device_string": "framework build device[] uses 'Name-Version' (verified: 'Galaxy S23-13' ran RD). For VD pair the catalog name+osVersion exactly, and set isVirtualDevice:true."
-  }
+  },
 }

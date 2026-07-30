@@ -43,7 +43,7 @@ import (
 type spec struct {
 	Endpoints map[string]string `json:"endpoints"`
 	Framework struct {
-		Apps map[string]string `json:"app_inventory_prod_adminltqa"`
+		Apps map[string]string `json:"app_inventory"`
 	} `json:"framework_family"`
 }
 
@@ -82,7 +82,7 @@ type result struct {
 }
 
 var (
-	flagProfile   = flag.String("profile", "prod:adminltqa", "auth profile resolved below the boundary")
+	flagProfile   = flag.String("profile", "", "auth profile resolved below the boundary; set LT_USERNAME/LT_ACCESS_KEY env or provide auth/<profile>.json")
 	flagBuild     = flag.String("build", "http-mcp matrix", "build name on the dashboards")
 	flagParallel  = flag.Int("parallel", 3, "max concurrent combos (respect cloud parallel limits)")
 	flagOnly      = flag.String("only", "", "substring filter: only run combos whose name contains this")
