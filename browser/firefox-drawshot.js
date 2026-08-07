@@ -30,7 +30,7 @@ const _needle = arguments[0] || "";
 // parent-process surface accumulation is proportional to surface AREA. Periphery renders
 // tiny (e.g. 0.18 -> ~1/30 the area) so it can stay LIVE without the memory climb; the
 // hero renders larger for a crisp driving view.
-const _scale = Math.max(0.05, Math.min(1, arguments[1] || 0.5));
+const _scale = Math.max(0.05, Math.min(2, arguments[1] || 0.5)); // up to 2 = supersample for retina hero (client caps ~1.25)
 const _q = Math.max(0.3, Math.min(0.92, arguments[2] || 0.6));
 
 (async () => {
