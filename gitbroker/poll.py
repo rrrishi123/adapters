@@ -72,25 +72,51 @@ def process_once():
             json.dump({"ulid": ulid, "error": "unparseable command: " + str(e)}, open(rpath, "w"), indent=1)
             done.append(ulid)
             continue
+        # ENVELOPE (Opus 5's full spec): {ulid, seq, agent, session, atom, ctx,
+        # method, params, auth_slot, not_after, max_ms}. auth_slot is a NAME only —
+        # never a value — because the relay branch is a PUBLIC artifact; the host
+        # resolves it from state/slots.json, so no secret ever crosses the boundary.
         method = cmd.get("method", "")
-        rec = {"ulid": ulid, "method": method,
+        atom = cmd.get("atom", "channel")
+        seq = cmd.get("seq")
+        rec = {"ulid": ulid, "seq": seq, "method": method, "atom": atom,
                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        # EXPIRY — a command that sat too long in git must not fire (not_after)
+        na = cmd.get("not_after")
+        if na and time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) > str(na):
+            rec["error"] = "expired (not_after %s)" % na
+            json.dump(rec, open(rpath, "w"), indent=1); done.append(ulid)
+            print("REFUSED (expired):", ulid); continue
         # POLICY allowlist (host-side trust)
         if allow and method not in allow:
             rec["error"] = "method '%s' not in policy allowlist" % method
-            json.dump(rec, open(rpath, "w"), indent=1)
-            done.append(ulid)
-            print("REFUSED (policy):", ulid, method)
-            continue
-        # FIRE through the WITNESS so the receipt carries the X-8-Witness reafference
+            json.dump(rec, open(rpath, "w"), indent=1); done.append(ulid)
+            print("REFUSED (policy):", ulid, method); continue
+        # AUTH SLOT → resolved HOST-SIDE, never in the public artifact
+        payload = dict(cmd)
+        slot = cmd.get("auth_slot")
+        if slot:
+            slots = {}
+            sf = os.path.join(BRIDGE, "state", "slots.json")
+            if os.path.exists(sf):
+                try: slots = json.load(open(sf))
+                except Exception: slots = {}
+            prof = slots.get(slot)
+            if not prof:
+                rec["error"] = "auth_slot '%s' not resolvable host-side" % slot
+                json.dump(rec, open(rpath, "w"), indent=1); done.append(ulid)
+                print("REFUSED (auth_slot):", ulid, slot); continue
+            payload["auth"] = {"profile": prof}  # the value stays host-side
+        payload.pop("auth_slot", None)
+        # FIRE through the WITNESS so the receipt carries the X-8-Witness reafference.
+        # atom routes the fire: channel → /run (a BiDi command), call → /fetch (HTTP).
+        endpoint = COLLECTOR + ("/fetch" if atom == "call" else "/run?session=" + cmd.get("session", "fox"))
         t0 = time.time()
         try:
-            status, hdrs, body = post(COLLECTOR + "/run?session=fox", cmd)
+            status, hdrs, body = post(endpoint, payload)
         except Exception as e:
             rec["error"] = "fire failed: " + str(e)
-            json.dump(rec, open(rpath, "w"), indent=1)
-            done.append(ulid)
-            continue
+            json.dump(rec, open(rpath, "w"), indent=1); done.append(ulid); continue
         rec["http"] = status
         rec["latency_ms"] = round((time.time() - t0) * 1000)
         rec["body_digest"] = hashlib.sha256(body.encode()).hexdigest()[:16]
