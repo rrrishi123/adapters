@@ -66,7 +66,7 @@ func main() {
 		url := fs.String("url", "about:blank", "initial url")
 		bin := fs.String("bin", "", "browser/driver binary (default: resolve from --engine)")
 		broker := fs.Int("broker", 0, "suggested channel broker port for the hint (default 4446 chrome, 4445 firefox)")
-		profile := fs.String("profile", "", "firefox: profile dir (default ~/.ltqa-firefox-deepseek — the persistent logged-in seat)")
+		profile := fs.String("profile", "", "firefox: profile dir (default ~/.8/firefox-profile — our own fresh seat)")
 		fs.Parse(os.Args[2:])
 		var rr *RunResult
 		var err error
@@ -160,7 +160,7 @@ func upFirefox(bin string, port int, profile string, brokerPort int) (*RunResult
 		}
 	}
 	if profile == "" {
-		profile = os.Getenv("HOME") + "/.ltqa-firefox-deepseek"
+		profile = os.Getenv("HOME") + "/.8/firefox-profile" // OUR fresh seat, nothing external
 	}
 
 	// replace any stale seat on this port — same restart-fresh semantics as up.sh had.
