@@ -250,8 +250,6 @@ func downFirefox(port int) map[string]any {
 	return res
 }
 
-// resolveGecko — PATH first, then the driver lent from ltqa-platform (all local
-// browser drivers are borrowed from there today; http-mcp needs them all).
 // resolveGecko — DISCOVER geckodriver on the host, don't inscribe a path. PATH
 // only (probe, don't assume); absent -> a clear error, never a hardcoded office
 // fallback. This is the discovered-substrate rule: the seat simply doesn't come
