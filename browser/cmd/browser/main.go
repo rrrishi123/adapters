@@ -252,15 +252,16 @@ func downFirefox(port int) map[string]any {
 
 // resolveGecko — PATH first, then the driver lent from ltqa-platform (all local
 // browser drivers are borrowed from there today; http-mcp needs them all).
+// resolveGecko — DISCOVER geckodriver on the host, don't inscribe a path. PATH
+// only (probe, don't assume); absent -> a clear error, never a hardcoded office
+// fallback. This is the discovered-substrate rule: the seat simply doesn't come
+// up where geckodriver isn't installed (degraded-but-valid), and the operator can
+// always override with --bin.
 func resolveGecko() (string, error) {
 	if p, err := exec.LookPath("geckodriver"); err == nil {
 		return p, nil
 	}
-	lent := os.Getenv("HOME") + "/Desktop/repos/ltqa-platform/.bin/drivers/firefox/0.37.0/geckodriver"
-	if _, err := os.Stat(lent); err == nil {
-		return lent, nil
-	}
-	return "", fmt.Errorf("no geckodriver on PATH and none lent at %s — pass --bin", lent)
+	return "", fmt.Errorf("geckodriver not found on PATH — install it or pass --bin <path>")
 }
 
 // up — launch the browser with CDP and resolve a page websocket to broker.
