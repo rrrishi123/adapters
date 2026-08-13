@@ -211,11 +211,11 @@ func Dial(addr, clientID string) (*Client, error) {
 		subs:   map[string]chan []byte{},
 		suback: make(chan struct{}, 1),
 	}
-	body := putString(nil, "MQTT")     // protocol name
-	body = append(body, 0x04)          // protocol level 4 = MQTT 3.1.1
-	body = append(body, 0x02)          // connect flags: clean session
-	body = append(body, 0x00, 0x3c)    // keep-alive 60s (unused here)
-	body = putString(body, clientID)   // payload: client id
+	body := putString(nil, "MQTT")   // protocol name
+	body = append(body, 0x04)        // protocol level 4 = MQTT 3.1.1
+	body = append(body, 0x02)        // connect flags: clean session
+	body = append(body, 0x00, 0x3c)  // keep-alive 60s (unused here)
+	body = putString(body, clientID) // payload: client id
 	if _, err := conn.Write(packet(pktCONNECT, body)); err != nil {
 		conn.Close()
 		return nil, err

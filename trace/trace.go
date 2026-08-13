@@ -44,11 +44,11 @@ const (
 
 // Frame is one neutral event in a recorded session.
 type Frame struct {
-	Seq     int    `json:"seq"`               // monotonic order within a session
-	TS      int64  `json:"ts"`                // unix millis at observation
-	Session string `json:"session"`           // opaque id for one held context / build
-	Mode    string `json:"mode"`              // ModeCall | ModeChannel
-	Dir     string `json:"dir"`               // DirEfferent | DirAfferent
+	Seq     int    `json:"seq"`     // monotonic order within a session
+	TS      int64  `json:"ts"`      // unix millis at observation
+	Session string `json:"session"` // opaque id for one held context / build
+	Mode    string `json:"mode"`    // ModeCall | ModeChannel
+	Dir     string `json:"dir"`     // DirEfferent | DirAfferent
 
 	// CALL mode
 	Method string `json:"method,omitempty"` // efferent: HTTP method
