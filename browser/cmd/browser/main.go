@@ -244,7 +244,7 @@ func downFirefox(port int) map[string]any {
 		return e == nil
 	}()
 	err := exec.Command("pkill", "-f", fmt.Sprintf("geckodriver --port %d", port)).Run()
-	_ = exec.Command("pkill", "-f", "firefox.*ltqa-firefox").Run()
+	_ = exec.Command("pkill", "-f", "firefox.*8/firefox-profile").Run() // our own seat marker
 	_ = os.Remove(seatFile())
 	res["reclaimed"] = err == nil
 	return res
