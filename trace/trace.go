@@ -73,10 +73,10 @@ const (
 type Frame struct {
 	Contract string `json:"contract,omitempty"` // Version at emission; a reader checks Compatible
 	Seq      int    `json:"seq"`                // monotonic order within a session
-	TS      int64  `json:"ts"`      // unix millis at observation
-	Session string `json:"session"` // opaque id for one held context / build
-	Mode    string `json:"mode"`    // ModeCall | ModeChannel
-	Dir     string `json:"dir"`     // DirEfferent | DirAfferent
+	TS       int64  `json:"ts"`                 // unix millis at observation
+	Session  string `json:"session"`            // opaque id for one held context / build
+	Mode     string `json:"mode"`               // ModeCall | ModeChannel
+	Dir      string `json:"dir"`                // DirEfferent | DirAfferent
 
 	// CALL mode
 	Method string `json:"method,omitempty"` // efferent: HTTP method
