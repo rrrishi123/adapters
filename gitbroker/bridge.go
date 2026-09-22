@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rrrishi123/adapters/internal/guard"
 )
 
 // Config is everything the relay needs. Nothing here has a built-in value
@@ -22,7 +24,13 @@ type Config struct {
 
 	CommandsDir string // relative to Dir; default "commands"
 	ReceiptsDir string // relative to Dir; default "receipts"
-	SlotsFile   string // relative to Dir; default "state/slots.json" (auth_slot → httpx.Auth, host-side only)
+	HaltFile    string // relative to Dir; default "state/halt" — the far end's revocation, checked before every fire
+
+	// Slots is the host-side auth-slot file (auth_slot → httpx.Auth). It MUST
+	// live outside Dir — Open refuses a path inside the checkout, because the
+	// bridge is public and a secret in the working tree is one commit from
+	// leaking. Empty = no slots: any envelope naming an auth_slot is refused.
+	Slots string
 
 	PollInterval time.Duration // Poller.Run cadence; required for Run
 	Collector    string        // witness base URL for CollectorFirer
@@ -41,8 +49,8 @@ func (c *Config) defaults() {
 	if c.ReceiptsDir == "" {
 		c.ReceiptsDir = "receipts"
 	}
-	if c.SlotsFile == "" {
-		c.SlotsFile = filepath.Join("state", "slots.json")
+	if c.HaltFile == "" {
+		c.HaltFile = filepath.Join("state", "halt")
 	}
 	if c.MaxBody <= 0 {
 		c.MaxBody = 8192
@@ -69,6 +77,13 @@ func Open(cfg Config) (*Bridge, error) {
 	cfg.defaults()
 	if strings.TrimSpace(cfg.Dir) == "" {
 		return nil, errors.New("gitbroker: Config.Dir is required")
+	}
+	if cfg.Slots != "" {
+		abs, err := guard.Outside(cfg.Slots, cfg.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("gitbroker: slots: %w", err)
+		}
+		cfg.Slots = abs
 	}
 	if _, err := os.Stat(filepath.Join(cfg.Dir, ".git")); err != nil && cfg.RepoURL != "" {
 		args := []string{"clone", "-q"}
@@ -155,7 +170,13 @@ func (b *Bridge) Push() error {
 
 func (b *Bridge) commandsPath() string { return filepath.Join(b.cfg.Dir, b.cfg.CommandsDir) }
 func (b *Bridge) receiptsPath() string { return filepath.Join(b.cfg.Dir, b.cfg.ReceiptsDir) }
-func (b *Bridge) slotsPath() string    { return filepath.Join(b.cfg.Dir, b.cfg.SlotsFile) }
+func (b *Bridge) haltPath() string     { return filepath.Join(b.cfg.Dir, b.cfg.HaltFile) }
+
+// Halted reports whether the far end's revocation (Config.HaltFile) is present.
+func (b *Bridge) Halted() bool {
+	_, err := os.Stat(b.haltPath())
+	return err == nil
+}
 
 func gitRun(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)

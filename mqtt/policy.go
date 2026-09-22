@@ -3,8 +3,11 @@ package mqtt
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+
+	"github.com/rrrishi123/adapters/internal/guard"
 )
 
 // Policy is the host's gate, both directions: the far end proposes, this
@@ -20,11 +23,18 @@ type PolicyFunc func(env *Envelope) Decision
 // Decide implements Policy.
 func (f PolicyFunc) Decide(env *Envelope) Decision { return f(env) }
 
-// AllowAll fires everything that validated and lets the full (capped) receipt
-// out. It is the default only so a loopback runs with zero config; a real
-// deployment sets a real policy.
+// AllowAll fires everything that validated with the default egress (capped
+// body for plain calls, allowlisted headers, digest-only for slot calls). It
+// is NOT a default anywhere: a Host with no Policy is Closed. Loopbacks and
+// tests set it explicitly, in code, where it is visible.
 var AllowAll Policy = PolicyFunc(func(*Envelope) Decision {
-	return Decision{Fired: true, Policy: "allow-all"}
+	return Decision{Fired: true, Policy: "allow-all", Egress: guard.DefaultEgress()}
+})
+
+// Closed refuses everything. It is what a Host runs with when no Policy was
+// configured — the relay fails shut, never open.
+var Closed Policy = PolicyFunc(func(*Envelope) Decision {
+	return Decision{Fired: false, Policy: "closed", Reason: "no policy configured — closed"}
 })
 
 // FilePolicy is the reference policy: a JSON file on the host, re-read on
@@ -37,13 +47,31 @@ var AllowAll Policy = PolicyFunc(func(*Envelope) Decision {
 //	  "allow_url_prefixes":    ["http://127.0.0.1:7070/"],// CALL: empty = any URL
 //	  "allow_sessions":        ["fox"],                   // CHANNEL: empty = any seat
 //	  "allow_channel_methods": ["browsingContext."],      // CHANNEL: prefix match; empty = any
-//	  "egress":                {"body": true, "headers": false}  // what leaves in the receipt; absent = both
+//	  "egress":                {"body": true, "headers": true, "authenticated_body": false}
 //	}
 //
-// A missing file means OPEN (allow, full egress); an unreadable or malformed
-// file means CLOSED (deny) — a broken policy must fail safe, not open.
+// egress: what leaves in the receipt toward a broker the host does not own.
+// headers means the ALLOWLISTED headers (Content-Type, Content-Length, X-8-*);
+// authenticated_body is the explicit opt-in for publishing the body of a
+// slot-authenticated call (default: digest only). Absent = the default egress.
+//
+// A missing, unreadable or malformed file means CLOSED (deny): a policy that
+// is not there is not a policy, and a broken one must fail safe. Use
+// NewFilePolicy to also refuse a path inside a public working tree.
 type FilePolicy struct {
 	Path string
+}
+
+// NewFilePolicy builds a FilePolicy after refusing a path that resolves inside
+// publicDir (a checkout the far end can read or write; "" = no such dir).
+// It does NOT require the file to exist yet — a missing file is simply closed
+// at decision time.
+func NewFilePolicy(path, publicDir string) (FilePolicy, error) {
+	abs, err := guard.Outside(path, publicDir)
+	if err != nil {
+		return FilePolicy{}, fmt.Errorf("mqtt: policy: %w", err)
+	}
+	return FilePolicy{Path: abs}, nil
 }
 
 type filePolicyDoc struct {
@@ -59,9 +87,12 @@ type filePolicyDoc struct {
 // Decide implements Policy.
 func (p FilePolicy) Decide(env *Envelope) Decision {
 	const name = "file-policy"
+	if strings.TrimSpace(p.Path) == "" {
+		return Decision{Fired: false, Policy: name, Reason: "no policy path — closed"}
+	}
 	b, err := os.ReadFile(p.Path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Decision{Fired: true, Policy: name, Reason: "no policy file — open"}
+		return Decision{Fired: false, Policy: name, Reason: "policy file missing — closed"}
 	}
 	if err != nil {
 		return Decision{Fired: false, Policy: name, Reason: "policy unreadable: " + err.Error()}

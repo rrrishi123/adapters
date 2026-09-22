@@ -21,11 +21,21 @@
 //
 // Trust: the far end only PROPOSES. The authoritative side (this poller) decides
 // what fires through the Policy hook (policy.go). Credentials never cross the
-// bridge: an envelope names an auth_slot, the poller resolves it host-side
-// (state/slots.json) and the receipt never echoes request headers.
+// bridge in either direction (internal/guard, task #1145):
 //
-// poll.py in this directory is the August prototype this package formalizes
-// (same bridge layout; the Go adapter is the shippable one).
+//   - the policy and the slots file live OUTSIDE the checkout (Open and
+//     NewFilePolicy refuse a path inside it); a missing policy is CLOSED;
+//   - an envelope's request headers are an ALLOWLIST and its URL is checked
+//     structurally (no user:key@host, no ?access_key=); auth is an auth_slot
+//     NAME the poller resolves host-side, in memory;
+//   - a receipt echoes only Content-Type / Content-Length / X-8-* response
+//     headers, and a slot-authenticated call publishes only the body's sha256
+//     unless the policy opts in (egress.authenticated_body);
+//   - HALT (state/halt in the bridge — the far end's revocation) is checked
+//     immediately before every fire.
+//
+// This package supersedes the August poll.py prototype (deleted in #1145 so
+// two pollers with different safety cannot coexist).
 package gitbroker
 
 import (
@@ -36,6 +46,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rrrishi123/adapters/internal/guard"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/trace"
 )
@@ -52,7 +63,8 @@ const AtomCall = trace.ModeCall
 
 // Envelope is what the far end commits: one proposed CALL. It is a PUBLIC
 // artifact (the bridge branch may be readable by anyone), so it must never
-// carry a credential — Validate rejects an Authorization header outright and
+// carry a credential — Validate allows only guard.RequestHeaderAllow headers,
+// refuses a URL with userinfo or a credential-named query parameter, and
 // auth_slot is a NAME the host resolves.
 type Envelope struct {
 	Schema string `json:"schema"`          // EnvelopeSchema
@@ -94,11 +106,9 @@ func (e *Envelope) Validate() error {
 	if e.Call.Method == "" {
 		e.Call.Method = "GET"
 	}
-	for k := range e.Call.Headers {
-		lk := strings.ToLower(k)
-		if lk == "authorization" || lk == "proxy-authorization" || lk == "cookie" {
-			return fmt.Errorf("gitbroker: envelope carries a %s header — the bridge is public; name an auth_slot instead", k)
-		}
+	// G4: header ALLOWLIST + structural URL check — the bridge is public
+	if err := guard.CheckRequest(e.Call); err != nil {
+		return fmt.Errorf("gitbroker: envelope: %w", err)
 	}
 	if e.NotAfter != "" {
 		if _, err := time.Parse(time.RFC3339, e.NotAfter); err != nil {
@@ -132,9 +142,10 @@ func safeID(s string) bool {
 
 // Decision is the authoritative side's verdict on one envelope.
 type Decision struct {
-	Fired  bool   `json:"fired"`            // true only if the CALL actually left this machine
-	Policy string `json:"policy,omitempty"` // which policy decided (name)
-	Reason string `json:"reason,omitempty"` // why it did not fire, or why it did
+	Fired  bool    `json:"fired"`            // true only if the CALL actually left this machine
+	Policy string  `json:"policy,omitempty"` // which policy decided (name)
+	Reason string  `json:"reason,omitempty"` // why it did not fire, or why it did
+	Egress *Egress `json:"egress,omitempty"` // outbound gate applied to the receipt (nil = guard.DefaultEgress)
 }
 
 // CallEcho is the part of the fired CALL a receipt may echo. Headers are
@@ -174,13 +185,14 @@ type Receipt struct {
 	Decision Decision  `json:"decision"`
 	Call     *CallEcho `json:"call,omitempty"`
 
-	Status     int               `json:"status,omitempty"`      // HTTP status of the afferent leg
-	LatencyMs  int64             `json:"latency_ms,omitempty"`  // measured at the poller
-	BodyLen    int               `json:"body_len,omitempty"`    // full length before the cap
-	BodyDigest string            `json:"body_digest,omitempty"` // sha256 hex of the FULL body
-	Body       string            `json:"body,omitempty"`        // capped at Config.MaxBody
-	Truncated  bool              `json:"truncated,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"` // response headers (first value each)
+	Status        int               `json:"status,omitempty"`      // HTTP status of the afferent leg
+	LatencyMs     int64             `json:"latency_ms,omitempty"`  // measured at the poller
+	BodyLen       int               `json:"body_len,omitempty"`    // full length before the cap
+	BodyDigest    string            `json:"body_digest,omitempty"` // sha256 hex of the FULL body
+	Body          string            `json:"body,omitempty"`        // capped at Config.MaxBody; absent when egress withholds it (always for auth_slot calls unless authenticated_body)
+	Truncated     bool              `json:"truncated,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`       // ALLOWLISTED response headers only: Content-Type, Content-Length, X-8-* (guard.ResponseHeaders)
+	Authenticated bool              `json:"authenticated,omitempty"` // the CALL was fired with a host-side auth_slot credential
 
 	Witness Witness `json:"witness"`
 	Error   string  `json:"error,omitempty"`

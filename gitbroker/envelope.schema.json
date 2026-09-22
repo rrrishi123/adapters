@@ -19,8 +19,8 @@
       "additionalProperties": false,
       "properties": {
         "method": { "type": "string", "default": "GET" },
-        "url": { "type": "string", "format": "uri" },
-        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Never Authorization / Proxy-Authorization / Cookie — Validate rejects them." },
+        "url": { "type": "string", "format": "uri", "description": "http(s) only. Validate rejects userinfo (user:key@host) and credential-named query parameters (access_key, api_key, token, sig, ...) structurally." },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ALLOWLIST (internal/guard.RequestHeaderAllow): Accept, Accept-Encoding, Accept-Language, Cache-Control, Content-Type, If-*, Range, User-Agent, X-Request-Id, X-Correlation-Id, X-8-*. Anything else (Authorization, Cookie, X-Api-Key, X-Auth-Token, ...) is rejected by Validate." },
         "body": { "type": "string" }
       }
     },

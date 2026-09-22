@@ -4,42 +4,116 @@
   "title": "mqtt envelope v1",
   "description": "One PROPOSED atom, published by the far end to <prefix>/commands/<ulid> (QoS 1). It travels a broker the host may not own, so it must never carry a credential (auth_slot is a NAME the host resolves). The far end proposes; the host's Policy decides. Unlike git, MQTT carries both atoms: a CALL (the wire's http_request shape) or a seat-addressed CHANNEL command (the wire's bidi_command shape).",
   "type": "object",
-  "required": ["schema", "ulid", "seq", "atom"],
+  "required": [
+    "schema",
+    "ulid",
+    "seq",
+    "atom"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema": { "const": "mqtt/envelope/v1" },
-    "ulid": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "description": "Id; also the last topic level (commands/<ulid>, receipts/<ulid>). Idempotency key: a ULID with a retained receipt is never fired again." },
-    "seq": { "type": "integer", "minimum": 0, "description": "The far end's monotonic sequence; a gap in receipts tells the far end something was lost." },
-    "agent": { "type": "string", "description": "Who proposes — provenance across the boundary; defaults to the far end's node name." },
-    "atom": { "enum": ["call", "channel"], "description": "Which wire atom the envelope carries. Exactly one of call / channel must be present accordingly." },
+    "schema": {
+      "const": "mqtt/envelope/v1"
+    },
+    "ulid": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]{1,128}$",
+      "description": "Id; also the last topic level (commands/<ulid>, receipts/<ulid>). Idempotency key: a ULID with a retained receipt is never fired again."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The far end's monotonic sequence; a gap in receipts tells the far end something was lost."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Who proposes \u2014 provenance across the boundary; defaults to the far end's node name."
+    },
+    "atom": {
+      "enum": [
+        "call",
+        "channel"
+      ],
+      "description": "Which wire atom the envelope carries. Exactly one of call / channel must be present accordingly."
+    },
     "call": {
       "type": "object",
-      "description": "atom=call: the CALL atom — identical to the wire's http_request shape (httpx.Request). Fired by the host via the witness (POST /fetch).",
-      "required": ["url"],
+      "description": "atom=call: the CALL atom \u2014 identical to the wire's http_request shape (httpx.Request). Fired by the host via the witness (POST /fetch).",
+      "required": [
+        "url"
+      ],
       "additionalProperties": false,
       "properties": {
-        "method": { "type": "string", "default": "GET" },
-        "url": { "type": "string", "format": "uri" },
-        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Never Authorization / Proxy-Authorization / Cookie — Validate rejects them." },
-        "body": { "type": "string" }
+        "method": {
+          "type": "string",
+          "default": "GET"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "http(s) only. Validate rejects userinfo (user:key@host) and credential-named query parameters (access_key, api_key, token, sig, ...) structurally."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "ALLOWLIST (internal/guard.RequestHeaderAllow): Accept, Accept-Encoding, Accept-Language, Cache-Control, Content-Type, If-*, Range, User-Agent, X-Request-Id, X-Correlation-Id, X-8-*. Anything else (Authorization, Cookie, X-Api-Key, X-Auth-Token, ...) is rejected by Validate."
+        },
+        "body": {
+          "type": "string"
+        }
       }
     },
     "channel": {
       "type": "object",
-      "description": "atom=channel: one CHANNEL command — the wire's bidi_command shape, addressed to a witness SEAT rather than a ws_url (the far end never sees the socket). Fired by the host via the witness (POST /run?session=<seat>).",
-      "required": ["session", "method"],
+      "description": "atom=channel: one CHANNEL command \u2014 the wire's bidi_command shape, addressed to a witness SEAT rather than a ws_url (the far end never sees the socket). Fired by the host via the witness (POST /run?session=<seat>).",
+      "required": [
+        "session",
+        "method"
+      ],
       "additionalProperties": false,
       "properties": {
-        "session": { "type": "string", "description": "Witness seat id (e.g. \"fox\"); resolved host-side to the held BiDi/CDP socket." },
-        "method": { "type": "string", "description": "Command method, e.g. browsingContext.getTree (BiDi) or Page.navigate (CDP)." },
-        "params": { "type": "object", "description": "Command params (defaults to {})." },
-        "id": { "type": "integer", "minimum": 1, "description": "Command id to match the response against (default 1)." }
+        "session": {
+          "type": "string",
+          "description": "Witness seat id (e.g. \"fox\"); resolved host-side to the held BiDi/CDP socket."
+        },
+        "method": {
+          "type": "string",
+          "description": "Command method, e.g. browsingContext.getTree (BiDi) or Page.navigate (CDP)."
+        },
+        "params": {
+          "type": "object",
+          "description": "Command params (defaults to {})."
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Command id to match the response against (default 1)."
+        }
       }
     },
-    "auth_slot": { "type": "string", "description": "Name of a host-side credential (the host's slots file). The value never enters a topic." },
-    "not_after": { "type": "string", "format": "date-time", "description": "A proposal that sat in the broker past this instant must not fire." },
-    "max_ms": { "type": "integer", "minimum": 0, "description": "Fire deadline hint in milliseconds; 0 = host default." },
-    "why": { "type": "string", "description": "Free text; echoed into the receipt." },
-    "proposed_at": { "type": "string", "format": "date-time" }
+    "auth_slot": {
+      "type": "string",
+      "description": "Name of a host-side credential (the host's slots file). The value never enters a topic."
+    },
+    "not_after": {
+      "type": "string",
+      "format": "date-time",
+      "description": "A proposal that sat in the broker past this instant must not fire."
+    },
+    "max_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Fire deadline hint in milliseconds; 0 = host default."
+    },
+    "why": {
+      "type": "string",
+      "description": "Free text; echoed into the receipt."
+    },
+    "proposed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
   }
 }

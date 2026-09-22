@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -37,7 +38,6 @@ import (
 	"github.com/rrrishi123/adapters/grpc"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/mqtt"
-	"github.com/rrrishi123/adapters/webrtc"
 )
 
 type result struct {
@@ -121,7 +121,7 @@ func fireMQTT() (string, error) {
 	defer cancel()
 	hcfg := cfg
 	hcfg.Node, hcfg.Actor = "loopback-host", "loopback-host"
-	host := &mqtt.Host{Config: hcfg}
+	host := &mqtt.Host{Config: hcfg, Policy: mqtt.AllowAll} // explicit: a nil Policy is Closed (#1145)
 	hctx, hstop := context.WithCancel(ctx)
 	hdone := make(chan error, 1)
 	go func() { hdone <- host.Serve(hctx) }()
@@ -148,11 +148,20 @@ func fireMQTT() (string, error) {
 	return fmt.Sprintf("envelope → commands/%s (QoS 1) → host fired via witness → retained receipt on %s (%s)", env.ULID, rec.Route.Topic, rec.Witness.Line), nil
 }
 
-// fireWebRTC — localhost offer/answer followed by a real held DataChannel.
+// fireWebRTC runs the separately built transport primitive beside this binary.
+// The process boundary keeps Pion out of the stdlib-only parent module.
 func fireWebRTC() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return webrtc.Loopback(ctx)
+	executable, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.CommandContext(ctx, filepath.Join(filepath.Dir(executable), "webrtc"), "loopback").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("webrtc loopback (build both binaries with ./build.sh): %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // fireUnix — the same CALL bytes over a unix-domain socket: no TCP port exists.
@@ -217,7 +226,7 @@ func fireGitbroker() (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "commands", env.ULID+".json"), raw, 0o644); err != nil {
 		return "", err
 	}
-	rep, err := (&gitbroker.Poller{Bridge: b}).Once(context.Background())
+	rep, err := (&gitbroker.Poller{Bridge: b, Policy: gitbroker.AllowAll}).Once(context.Background()) // explicit: a nil Policy is Closed (#1145)
 	if err != nil {
 		return "", err
 	}

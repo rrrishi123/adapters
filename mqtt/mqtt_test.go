@@ -362,6 +362,9 @@ func (r *relayRig) host(t *testing.T, node string, policy Policy) (*Host, contex
 	t.Helper()
 	cfg := r.cfg
 	cfg.Node, cfg.Actor = node, node+"-actor"
+	if policy == nil {
+		policy = AllowAll // explicit: a nil Policy is Closed (#1145)
+	}
 	h := &Host{Config: cfg, Policy: policy, Log: log.New(os.Stderr, "", 0)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -621,6 +624,17 @@ func TestMQTT_Relay_PolicyGatesBothWays(t *testing.T) {
 	if rec.Decision.Fired || !strings.Contains(rec.Decision.Reason, "malformed") {
 		t.Fatalf("malformed policy must fail closed: %+v", rec.Decision)
 	}
+	// G1: MISSING policy = closed, not open
+	if err := os.Remove(pf); err != nil {
+		t.Fatal(err)
+	}
+	rec, err = far.Fire(ctx, &Envelope{ULID: "p-missing", Seq: 6, Atom: AtomCall, Call: &httpx.Request{URL: r.target.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Decision.Fired || !strings.Contains(rec.Decision.Reason, "missing") || !strings.Contains(rec.Decision.Reason, "closed") {
+		t.Fatalf("missing policy must be CLOSED: %+v", rec.Decision)
+	}
 }
 
 // auth_slot: the far end names a slot; the host resolves it in memory and the
@@ -640,8 +654,9 @@ func TestMQTT_Relay_AuthSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rec.Decision.Fired || !strings.Contains(rec.Body, `"auth":true`) {
-		t.Fatalf("slot not applied at the host: %+v", rec)
+	// G3: a slot-authenticated call publishes only the digest by default
+	if !rec.Decision.Fired || !rec.Authenticated || rec.Body != "" || rec.BodyLen == 0 || rec.BodyDigest != Digest([]byte(`{"transport":"mqtt","ok":true,"auth":true}`)) {
+		t.Fatalf("slot call must be digest-only (proves the slot was applied via the digest): %+v", rec)
 	}
 	raw, _ := json.Marshal(rec)
 	if strings.Contains(string(raw), "never-published") {
@@ -678,6 +693,154 @@ func TestMQTT_Relay_EveryPathYieldsReceipt(t *testing.T) {
 	raw, _ = json.Marshal(Envelope{ULID: "u4", Atom: "queue"})
 	if rec := h.Process(ctx, "u4", raw); rec.Decision.Fired || rec.Decision.Policy != "validate" {
 		t.Fatalf("bad atom: %+v", rec.Decision)
+	}
+	// G1: a Host with no Policy at all is CLOSED
+	raw, _ = json.Marshal(Envelope{ULID: "u5", Atom: AtomCall, Call: &httpx.Request{URL: "http://x/"}})
+	if rec := h.Process(ctx, "u5", raw); rec.Decision.Fired || rec.Decision.Policy != "closed" {
+		t.Fatalf("nil policy must be closed: %+v", rec.Decision)
+	}
+}
+
+// --- the relay security gate (#1145) ---
+
+type fakeFirer struct {
+	headers http.Header
+	body    string
+	sawAuth string
+}
+
+func (f *fakeFirer) FireCall(_ context.Context, c httpx.Request) (*Outcome, error) {
+	f.sawAuth = c.Headers["Authorization"]
+	return &Outcome{Status: 200, Headers: f.headers.Clone(), Body: []byte(f.body)}, nil
+}
+func (f *fakeFirer) FireChannel(context.Context, ChannelOp) (*Outcome, error) {
+	return &Outcome{Status: 200, Headers: f.headers.Clone(), Body: []byte(f.body)}, nil
+}
+
+// G3: response headers are allowlisted — a Set-Cookie (or any server header)
+// is NOT in the receipt; Content-Type / Content-Length / X-8-* are. A
+// slot-authenticated call publishes only the digest unless the policy opts in.
+func TestMQTT_G3_ReceiptEgress(t *testing.T) {
+	slots := t.TempDir() + "/slots.json"
+	if err := os.WriteFile(slots, []byte(`{"lab":{"type":"bearer","key":"never-published"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf := t.TempDir() + "/policy.json"
+	if err := os.WriteFile(pf, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Content-Length", "16")
+	h.Set("X-8-Witness", "seen · act #9 · call")
+	h.Set("X-8-Ledger-Id", "9")
+	h.Add("Set-Cookie", "session=TOPSECRET; HttpOnly")
+	h.Set("WWW-Authenticate", "Bearer realm=private")
+	h.Set("Server", "nginx/1.0")
+	ff := &fakeFirer{headers: h, body: `{"private":true}`}
+	host := &Host{Config: Config{Broker: "mqtt://unused:1883", Node: "h", Slots: slots}, Firer: ff, Policy: FilePolicy{Path: pf}}
+	if err := host.Config.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	fire := func(ulid string, env Envelope) *Receipt {
+		t.Helper()
+		env.ULID = ulid
+		raw, _ := json.Marshal(env)
+		rec := host.Process(ctx, ulid, raw)
+		out, _ := json.Marshal(rec)
+		for _, leak := range []string{"Set-Cookie", "TOPSECRET", "WWW-Authenticate", "nginx", "never-published"} {
+			if strings.Contains(string(out), leak) {
+				t.Fatalf("%s: %q leaked into the published receipt: %s", ulid, leak, out)
+			}
+		}
+		return rec
+	}
+	plain := fire("plain", Envelope{Atom: AtomCall, Call: &httpx.Request{URL: "http://x.local/"}})
+	if !plain.Decision.Fired || plain.Body != `{"private":true}` || plain.Authenticated {
+		t.Fatalf("plain: %+v", plain)
+	}
+	if plain.Headers["Content-Type"] != "application/json" || plain.Headers["Content-Length"] != "16" || plain.Headers["X-8-Witness"] == "" || plain.Headers["X-8-Ledger-Id"] != "9" || len(plain.Headers) != 4 {
+		t.Fatalf("allowlisted headers wrong: %v", plain.Headers)
+	}
+	slot := fire("slot", Envelope{Atom: AtomCall, Call: &httpx.Request{URL: "http://x.local/"}, AuthSlot: "lab"})
+	if ff.sawAuth != "Bearer never-published" {
+		t.Fatalf("slot must be applied host-side: %q", ff.sawAuth)
+	}
+	if !slot.Decision.Fired || !slot.Authenticated || slot.Body != "" || slot.BodyLen != 16 || slot.BodyDigest != Digest([]byte(`{"private":true}`)) || len(slot.Headers) != 4 {
+		t.Fatalf("slot call must be digest-only by default: %+v", slot)
+	}
+	ch := fire("chan", Envelope{Atom: AtomChannel, Channel: &ChannelOp{Session: "fox", Method: "browsingContext.getTree"}})
+	if !ch.Decision.Fired || len(ch.Headers) != 4 {
+		t.Fatalf("channel receipt headers must be allowlisted too: %+v", ch)
+	}
+	// explicit opt-in publishes the authenticated body
+	if err := os.WriteFile(pf, []byte(`{"egress":{"body":true,"headers":true,"authenticated_body":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	optin := fire("slot-optin", Envelope{Atom: AtomCall, Call: &httpx.Request{URL: "http://x.local/"}, AuthSlot: "lab"})
+	if optin.Body != `{"private":true}` || optin.Decision.Egress == nil || !optin.Decision.Egress.AuthenticatedBody {
+		t.Fatalf("opt-in must publish: %+v", optin)
+	}
+}
+
+// G4: request headers are an allowlist and the URL is checked structurally —
+// userinfo, ?access_key=, X-Api-Key, X-Auth-Token, Cookie all refuse at
+// Validate: the far end cannot even publish them, and the host refuses them
+// if they arrive anyway.
+func TestMQTT_G4_CredentialShapesRefused(t *testing.T) {
+	bad := map[string]httpx.Request{
+		"userinfo":     {URL: "https://user:key@host.local/path"},
+		"userinfo-tok": {URL: "https://tok@host.local/path"},
+		"access-key":   {URL: "http://host.local/api?access_key=abc"},
+		"api-key-hdr":  {URL: "http://host.local/", Headers: map[string]string{"X-Api-Key": "k"}},
+		"auth-token":   {URL: "http://host.local/", Headers: map[string]string{"X-Auth-Token": "k"}},
+		"cookie":       {URL: "http://host.local/", Headers: map[string]string{"Cookie": "sid=1"}},
+		"authz":        {URL: "http://host.local/", Headers: map[string]string{"Authorization": "Bearer x"}},
+		"unknown-hdr":  {URL: "http://host.local/", Headers: map[string]string{"X-Anything-Else": "v"}},
+		"file-scheme":  {URL: "file:///etc/passwd"},
+	}
+	far := &FarEnd{Config: Config{Broker: "mqtt://unused:1883", Node: "far"}}
+	host := &Host{Config: Config{Broker: "mqtt://unused:1883", Node: "h"}, Policy: AllowAll, Firer: &fakeFirer{headers: http.Header{}}}
+	if err := host.Config.defaults(); err != nil {
+		t.Fatal(err)
+	}
+	for name, call := range bad {
+		c := call
+		// the far end refuses to publish it
+		err := far.Propose(context.Background(), nil, &Envelope{ULID: name, Seq: 1, Atom: AtomCall, Call: &c})
+		if err == nil {
+			t.Fatalf("%s: far end must refuse to publish %+v", name, call)
+		}
+		if strings.Contains(err.Error(), "key@") || strings.Contains(err.Error(), "Bearer x") {
+			t.Fatalf("%s: the refusal must not echo the credential: %v", name, err)
+		}
+		// and the host refuses it if it arrives anyway (a rogue far end)
+		raw, _ := json.Marshal(Envelope{ULID: name, Seq: 1, Atom: AtomCall, Call: &c})
+		rec := host.Process(context.Background(), name, raw)
+		if rec.Decision.Fired || rec.Decision.Policy != "validate" {
+			t.Fatalf("%s: host must refuse at validate: %+v", name, rec.Decision)
+		}
+	}
+	ok := Envelope{ULID: "ok", Seq: 1, Atom: AtomCall, Call: &httpx.Request{URL: "http://host.local/?q=1", Headers: map[string]string{"Accept": "*/*", "X-8-Actor": "far"}}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("allowlisted headers must pass: %v", err)
+	}
+}
+
+// G1: NewFilePolicy refuses a policy inside a public working tree.
+func TestMQTT_G1_PolicyInsidePublicTreeRefused(t *testing.T) {
+	pub := t.TempDir()
+	inside := pub + "/policy.json"
+	os.WriteFile(inside, []byte(`{}`), 0o644)
+	if _, err := NewFilePolicy(inside, pub); err == nil {
+		t.Fatal("policy inside the public tree must be refused")
+	}
+	if _, err := NewFilePolicy(t.TempDir()+"/policy.json", pub); err != nil {
+		t.Fatalf("outside must be accepted: %v", err)
+	}
+	if _, err := NewFilePolicy("", ""); err == nil {
+		t.Fatal("an empty policy path must be refused: the operator names it")
 	}
 }
 
@@ -716,7 +879,7 @@ func TestMQTT_SchemasMatchTypes(t *testing.T) {
 		Call:     &httpx.Request{Method: "GET", URL: "http://x/", Headers: map[string]string{"A": "b"}, Body: "{}"},
 		Channel:  &ChannelOp{Session: "fox", Method: "m", Params: json.RawMessage(`{}`), ID: 1},
 		AuthSlot: "s", NotAfter: "2030-01-01T00:00:00Z", MaxMs: 1, Why: "w", ProposedAt: "2030-01-01T00:00:00Z"})
-	check("receipt.schema.json", Receipt{Schema: ReceiptSchema, Contract: "v", ULID: "x", Seq: 1, Agent: "a", Atom: AtomCall, Why: "w",
+	check("receipt.schema.json", Receipt{Authenticated: true, Schema: ReceiptSchema, Contract: "v", ULID: "x", Seq: 1, Agent: "a", Atom: AtomCall, Why: "w",
 		Decision: Decision{Fired: true, Policy: "p", Reason: "r", Egress: &Egress{Body: true, Headers: true}},
 		Call:     &CallEcho{Method: "GET", URL: "http://x/"}, Channel: &ChannelEcho{Session: "fox", Method: "m"},
 		Status: 200, LatencyMs: 1, BodyLen: 1, BodyDigest: "d", Body: "b", Truncated: true, Headers: map[string]string{"A": "b"},

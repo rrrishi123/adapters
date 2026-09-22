@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rrrishi123/adapters/internal/guard"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/trace"
 )
@@ -177,7 +178,7 @@ func ulidOf(topic string) string {
 type Host struct {
 	Config Config
 	Firer  Firer  // nil = CollectorFirer from Config
-	Policy Policy // nil = AllowAll (loopback default; set a real one in production)
+	Policy Policy // nil = Closed (fail shut); loopbacks set AllowAll explicitly
 	Log    *log.Logger
 	Now    func() time.Time // nil = time.Now
 
@@ -231,7 +232,7 @@ func (h *Host) policy() Policy {
 	if h.Policy != nil {
 		return h.Policy
 	}
-	return AllowAll
+	return Closed
 }
 
 func (h *Host) now() time.Time {
@@ -466,6 +467,7 @@ func (h *Host) Process(ctx context.Context, ulid string, raw []byte) *Receipt {
 	defer cancel()
 	var out *Outcome
 	var err error
+	authenticated := false
 	switch env.Atom {
 	case AtomCall:
 		call := *env.Call
@@ -476,6 +478,7 @@ func (h *Host) Process(ctx context.Context, ulid string, raw []byte) *Receipt {
 				return rec
 			}
 			auth.Apply(&call) // the credential exists only here, on this side, in memory
+			authenticated, rec.Authenticated = true, true
 		}
 		out, err = h.firer().FireCall(fctx, call)
 	case AtomChannel:
@@ -485,28 +488,25 @@ func (h *Host) Process(ctx context.Context, ulid string, raw []byte) *Receipt {
 		rec.Error = "fire failed: " + err.Error()
 		return rec
 	}
+	// G3: the receipt travels a broker the host does not own — egress-gated,
+	// headers allowlisted, slot-authenticated body digest-only unless opted in
 	egress := d.Egress
 	if egress == nil {
-		egress = &Egress{Body: true, Headers: true}
+		egress = guard.DefaultEgress()
 	}
 	rec.Status = out.Status
 	rec.LatencyMs = out.Latency.Milliseconds()
 	rec.BodyLen = len(out.Body)
 	rec.BodyDigest = Digest(out.Body)
-	if egress.Body {
+	if egress.PublishBody(authenticated) {
 		if max := cfg.MaxBody; len(out.Body) > max {
 			rec.Body, rec.Truncated = string(out.Body[:max]), true
 		} else {
 			rec.Body = string(out.Body)
 		}
 	}
-	if egress.Headers {
-		rec.Headers = map[string]string{}
-		for k, v := range out.Headers {
-			if len(v) > 0 {
-				rec.Headers[k] = v[0]
-			}
-		}
+	if egress.PublishHeaders() {
+		rec.Headers = guard.ResponseHeaders(out.Headers)
 	}
 	rec.Witness = Witness{
 		Line:     out.Headers.Get("X-8-Witness"),

@@ -8,9 +8,13 @@
 //	mqtt -role broker -listen 127.0.0.1:1883        # the in-process broker as a daemon (no mosquitto needed)
 //
 // Every value is a flag with an MQTT_* environment fallback; nothing points at
-// a machine unless the operator says so. Both roles only dial OUT. The host's
-// policy is a JSON file (missing = open, malformed = closed); its auth slots
-// file is never published anywhere.
+// a machine unless the operator says so. Both roles only dial OUT.
+//
+// Security gate (#1145): the host's -policy is REQUIRED and a missing file is
+// CLOSED — the relay never runs open. -slots (the auth_slot credentials) is
+// never published anywhere. Neither may live inside a git working tree the
+// far end could read (checked at start: the nearest enclosing checkout of
+// the current directory).
 package main
 
 import (
@@ -21,11 +25,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rrrishi123/adapters/internal/guard"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/mqtt"
 )
@@ -79,8 +85,8 @@ func main() {
 		reconnect = flag.Duration("reconnect", envDuration("MQTT_RECONNECT", 3*time.Second), "host: back-off between sessions")
 		collector = flag.String("collector", envOr("MQTT_COLLECTOR", ""), "host: witness base URL, e.g. http://127.0.0.1:7070")
 		actor     = flag.String("actor", envOr("MQTT_ACTOR", ""), "host: X-8-Actor declared on every fire; default node")
-		policy    = flag.String("policy", envOr("MQTT_POLICY", ""), "host: policy JSON file (missing = open, malformed = closed); empty = allow-all")
-		slots     = flag.String("slots", envOr("MQTT_SLOTS", ""), "host: auth-slot file; never published")
+		policy    = flag.String("policy", envOr("MQTT_POLICY", ""), "host: policy JSON file (REQUIRED; missing or malformed = closed; must not sit in a git working tree)")
+		slots     = flag.String("slots", envOr("MQTT_SLOTS", ""), "host: auth-slot credentials file; never published; must not sit in a git working tree; empty = auth_slot envelopes are refused")
 		maxBody   = flag.Int("max-body", envInt("MQTT_MAX_BODY", 8192), "host: receipt body cap in bytes")
 		fireTO    = flag.Duration("fire-timeout", envDuration("MQTT_FIRE_TIMEOUT", 60*time.Second), "host: default per-fire deadline")
 
@@ -95,7 +101,7 @@ func main() {
 		verbose     = flag.Bool("v", envBool("MQTT_VERBOSE"), "log to stderr")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage:\n  mqtt -role host -broker URL [-prefix P] [-node N] -collector URL [-actor A] [-policy F] [-slots F]\n  mqtt -role far  -broker URL [-prefix P] [-node N] -call METHOD URL [BODY] | -channel SEAT METHOD [PARAMS] | -propose JSON | -propose-file F | -await ULID\n  mqtt -role broker [-listen ADDR] [-username U -password P]\n\nflags (each falls back to MQTT_<NAME>):\n")
+		fmt.Fprintf(os.Stderr, "usage:\n  mqtt -role host -broker URL [-prefix P] [-node N] -collector URL -policy F [-actor A] [-slots F]\n  mqtt -role far  -broker URL [-prefix P] [-node N] -call METHOD URL [BODY] | -channel SEAT METHOD [PARAMS] | -propose JSON | -propose-file F | -await ULID\n  mqtt -role broker [-listen ADDR] [-username U -password P]\n\nflags (each falls back to MQTT_<NAME>):\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -134,10 +140,30 @@ func main() {
 
 	switch *role {
 	case "host":
-		h := &mqtt.Host{Config: cfg, Log: logger}
-		if *policy != "" {
-			h.Policy = mqtt.FilePolicy{Path: *policy}
+		if *policy == "" {
+			fmt.Fprintln(os.Stderr, "mqtt: -policy is required for -role host (or MQTT_POLICY) — the relay does not run open")
+			flag.Usage()
+			os.Exit(2)
 		}
+		// G1/G2: neither the policy nor the slots file may sit in a public working tree
+		public := enclosingGitDir(".")
+		fp, err := mqtt.NewFilePolicy(*policy, public)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if _, err := os.Stat(fp.Path); err != nil {
+			log.Printf("mqtt: policy %s is not readable (%v) — the host is CLOSED until it is", fp.Path, err)
+		}
+		if *slots != "" {
+			abs, err := guard.Outside(*slots, public)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "mqtt: slots:", err)
+				os.Exit(2)
+			}
+			cfg.Slots = abs
+		}
+		h := &mqtt.Host{Config: cfg, Log: logger, Policy: fp}
 		if err := h.Run(ctx); err != nil && err != context.Canceled {
 			log.Fatal(err)
 		}
@@ -170,6 +196,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mqtt: -role must be host, far or broker (or MQTT_ROLE)")
 		flag.Usage()
 		os.Exit(2)
+	}
+}
+
+// enclosingGitDir returns the nearest ancestor of dir that is a git working
+// tree ("" when there is none). The host has no bridge checkout of its own,
+// so the public tree it must keep secrets out of is whichever one it was
+// started inside.
+func enclosingGitDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if _, err := os.Stat(filepath.Join(cur, ".git")); err == nil {
+			return cur
+		}
+		if filepath.Dir(cur) == cur {
+			return ""
+		}
 	}
 }
 

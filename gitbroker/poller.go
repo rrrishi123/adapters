@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rrrishi123/adapters/internal/guard"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/trace"
 )
@@ -20,7 +21,7 @@ import (
 type Poller struct {
 	Bridge *Bridge
 	Firer  Firer  // nil = CollectorFirer from Bridge config
-	Policy Policy // nil = AllowAll (loopback default; set a real one in production)
+	Policy Policy // nil = Closed (fail shut); loopbacks set AllowAll explicitly
 	Log    *log.Logger
 	Now    func() time.Time // nil = time.Now
 }
@@ -32,8 +33,33 @@ type Report struct {
 	Fired     int      `json:"fired"`
 	Refused   int      `json:"refused"`
 	Errors    int      `json:"errors"`
+	Halted    bool     `json:"halted,omitempty"` // state/halt present: the poll stopped before a fire, unanswered envelopes wait
 	Commit    string   `json:"commit,omitempty"`
 	SyncError string   `json:"sync_error,omitempty"`
+}
+
+// ErrHalted is returned by process when the far end's HALT appeared
+// immediately before the fire; the envelope stays unanswered.
+var ErrHalted = fmt.Errorf("gitbroker: HALTED — %s present, refusing to fire", filepath.Join("state", "halt"))
+
+// Check verifies the poller's safety configuration before any poll: a
+// FilePolicy must live outside the bridge checkout (G1). Once and Run call it;
+// a failure here is fatal, not a refusal receipt — the relay must not start.
+func (p *Poller) Check() error {
+	if p.Bridge == nil {
+		return fmt.Errorf("gitbroker: Poller.Bridge is nil")
+	}
+	if fp, ok := p.Policy.(FilePolicy); ok {
+		if _, err := guard.Outside(fp.Path, p.Bridge.cfg.Dir); err != nil {
+			return fmt.Errorf("gitbroker: policy: %w", err)
+		}
+	}
+	if fp, ok := p.Policy.(*FilePolicy); ok && fp != nil {
+		if _, err := guard.Outside(fp.Path, p.Bridge.cfg.Dir); err != nil {
+			return fmt.Errorf("gitbroker: policy: %w", err)
+		}
+	}
+	return nil
 }
 
 func (p *Poller) firer() Firer {
@@ -48,7 +74,7 @@ func (p *Poller) policy() Policy {
 	if p.Policy != nil {
 		return p.Policy
 	}
-	return AllowAll
+	return Closed
 }
 
 func (p *Poller) now() time.Time {
@@ -70,8 +96,8 @@ func (p *Poller) logf(format string, a ...any) {
 // a crash between fire and push is at worst one duplicate fire, never a lost
 // receipt.
 func (p *Poller) Once(ctx context.Context) (Report, error) {
-	if p.Bridge == nil {
-		return Report{}, fmt.Errorf("gitbroker: Poller.Bridge is nil")
+	if err := p.Check(); err != nil {
+		return Report{}, err
 	}
 	rep := Report{Mode: p.Bridge.Mode()}
 	if err := p.Bridge.Pull(); err != nil {
@@ -98,7 +124,20 @@ func (p *Poller) Once(ctx context.Context) (Report, error) {
 		if _, err := os.Stat(rpath); err == nil {
 			continue // already answered — idempotent
 		}
-		rec := p.process(ctx, ulid, filepath.Join(p.Bridge.commandsPath(), fn))
+		// HALT — the far end's revocation, checked before EVERY envelope and
+		// again inside process immediately before the fire. A halted poll
+		// leaves the rest unanswered so they fire once the halt is lifted.
+		if p.Bridge.Halted() {
+			rep.Halted = true
+			p.logf("HALTED — %s present, refusing to fire (%d envelope(s) left unanswered)", p.Bridge.haltPath(), len(names))
+			break
+		}
+		rec, err := p.process(ctx, ulid, filepath.Join(p.Bridge.commandsPath(), fn))
+		if err == ErrHalted {
+			rep.Halted = true
+			p.logf("HALTED — %s appeared before the fire of %s; left unanswered", p.Bridge.haltPath(), ulid)
+			break
+		}
 		if err := writeJSONAtomic(rpath, rec); err != nil {
 			return rep, fmt.Errorf("gitbroker: write receipt %s: %w", ulid, err)
 		}
@@ -129,6 +168,9 @@ func (p *Poller) Once(ctx context.Context) (Report, error) {
 
 // Run polls at Config.PollInterval until ctx is done.
 func (p *Poller) Run(ctx context.Context) error {
+	if err := p.Check(); err != nil {
+		return err
+	}
 	iv := p.Bridge.cfg.PollInterval
 	if iv <= 0 {
 		return fmt.Errorf("gitbroker: Config.PollInterval must be > 0 for Run")
@@ -149,8 +191,10 @@ func (p *Poller) Run(ctx context.Context) error {
 
 // process turns one envelope file into a receipt. Every path — unparseable,
 // invalid, expired, refused, failed, fired — yields a receipt, because the far
-// end has no other way to learn what happened.
-func (p *Poller) process(ctx context.Context, ulid, path string) *Receipt {
+// end has no other way to learn what happened. The one exception is HALT
+// appearing immediately before the fire: then it returns ErrHalted and no
+// receipt, so the envelope is answered after the halt is lifted.
+func (p *Poller) process(ctx context.Context, ulid, path string) (*Receipt, error) {
 	host, _ := os.Hostname()
 	rec := &Receipt{
 		Schema:      ReceiptSchema,
@@ -164,68 +208,78 @@ func (p *Poller) process(ctx context.Context, ulid, path string) *Receipt {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		rec.Error = "unreadable envelope: " + err.Error()
-		return rec
+		return rec, nil
 	}
 	var env Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		rec.Error = "unparseable envelope: " + err.Error()
-		return rec
+		return rec, nil
 	}
 	rec.Seq, rec.Agent, rec.Why = env.Seq, env.Agent, env.Why
 	rec.Call = &CallEcho{Method: env.Call.Method, URL: env.Call.URL}
 	if err := env.Validate(); err != nil {
 		rec.Decision = Decision{Fired: false, Policy: "validate", Reason: err.Error()}
-		return rec
+		return rec, nil
 	}
 	rec.Call.Method = env.Call.Method // Validate may have defaulted it
 	if env.ULID != "" && env.ULID != ulid {
 		rec.Decision = Decision{Fired: false, Policy: "validate", Reason: fmt.Sprintf("envelope ulid %q does not match file name %q", env.ULID, ulid)}
-		return rec
+		return rec, nil
 	}
 	if env.Expired(p.now()) {
 		rec.Decision = Decision{Fired: false, Policy: "expiry", Reason: "expired (not_after " + env.NotAfter + ")"}
-		return rec
+		return rec, nil
 	}
 	// the authoritative side decides — the far end only proposed
 	d := p.policy().Decide(&env)
 	rec.Decision = d
 	if !d.Fired {
-		return rec
+		return rec, nil
 	}
 	call := env.Call
-	if env.AuthSlot != "" {
+	authenticated := env.AuthSlot != ""
+	if authenticated {
 		auth, err := p.resolveSlot(env.AuthSlot)
 		if err != nil {
 			rec.Decision = Decision{Fired: false, Policy: "auth-slot", Reason: err.Error()}
-			return rec
+			return rec, nil
 		}
 		auth.Apply(&call) // the credential exists only here, on this side, in memory
+		rec.Authenticated = true
 	}
 	timeout := p.Bridge.cfg.FireTimeout
 	if env.MaxMs > 0 {
 		timeout = time.Duration(env.MaxMs) * time.Millisecond
+	}
+	// HALT — checked immediately before the fire, as poll.py did
+	if p.Bridge.Halted() {
+		return nil, ErrHalted
 	}
 	fctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err := p.firer().Fire(fctx, call)
 	if err != nil {
 		rec.Error = "fire failed: " + err.Error()
-		return rec
+		return rec, nil
+	}
+	// G3: the receipt is a public artifact — egress-gated, headers allowlisted
+	egress := d.Egress
+	if egress == nil {
+		egress = guard.DefaultEgress()
 	}
 	rec.Status = out.Status
 	rec.LatencyMs = out.Latency.Milliseconds()
 	rec.BodyLen = len(out.Body)
 	rec.BodyDigest = Digest(out.Body)
-	if max := p.Bridge.cfg.MaxBody; len(out.Body) > max {
-		rec.Body, rec.Truncated = string(out.Body[:max]), true
-	} else {
-		rec.Body = string(out.Body)
-	}
-	rec.Headers = map[string]string{}
-	for k, v := range out.Headers {
-		if len(v) > 0 {
-			rec.Headers[k] = v[0]
+	if egress.PublishBody(authenticated) {
+		if max := p.Bridge.cfg.MaxBody; len(out.Body) > max {
+			rec.Body, rec.Truncated = string(out.Body[:max]), true
+		} else {
+			rec.Body = string(out.Body)
 		}
+	}
+	if egress.PublishHeaders() {
+		rec.Headers = guard.ResponseHeaders(out.Headers)
 	}
 	rec.Witness = Witness{
 		Line:     out.Headers.Get("X-8-Witness"),
@@ -233,15 +287,18 @@ func (p *Poller) process(ctx context.Context, ulid, path string) *Receipt {
 		Ledger:   out.Headers.Get("X-8-Ledger"),
 		DMs:      out.Headers.Get("X-8-DMs"),
 	}
-	return rec
+	return rec, nil
 }
 
 // resolveSlot maps an auth_slot NAME to a credential from the host-side slots
-// file ({"<slot>": {"type":"bearer","key":"..."}, ...}). The file lives in the
-// bridge checkout by default but must be git-ignored there — it is the one
-// thing that never gets committed.
+// file ({"<slot>": {"type":"bearer","key":"..."}, ...}). The file lives
+// OUTSIDE the bridge checkout (Config.Slots; Open refuses a path inside it) —
+// it is the one thing that must never be a commit away from public.
 func (p *Poller) resolveSlot(slot string) (httpx.Auth, error) {
-	b, err := os.ReadFile(p.Bridge.slotsPath())
+	if p.Bridge.cfg.Slots == "" {
+		return httpx.Auth{}, fmt.Errorf("auth_slot %q: no slots file configured on the host (-slots / GITBROKER_SLOTS)", slot)
+	}
+	b, err := os.ReadFile(p.Bridge.cfg.Slots)
 	if err != nil {
 		return httpx.Auth{}, fmt.Errorf("auth_slot %q: slots file unavailable: %v", slot, err)
 	}

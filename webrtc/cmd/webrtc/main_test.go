@@ -49,3 +49,16 @@ func TestInvalidNodeConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestLoopbackIgnoresDeploymentConfiguration(t *testing.T) {
+	t.Setenv("WEBRTC_ROLE", "answer")
+	t.Setenv("WEBRTC_ICE_SERVERS", "invalid")
+	t.Setenv("WEBRTC_TIMEOUT", "invalid")
+	var out, diagnostic bytes.Buffer
+	if err := run(context.Background(), []string{"loopback"}, &out, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "3 matched commands + 1 peer event") {
+		t.Fatalf("unexpected loopback result: %s", &out)
+	}
+}

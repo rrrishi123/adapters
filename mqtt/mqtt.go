@@ -16,14 +16,20 @@
 //	far end  ◀──deliver── broker                              (its own held subscription — or the retained copy, later)
 //	both     ──PUBLISH──▶ broker  <prefix>/presence/<node>   (retained + last-will: the held connection made visible)
 //
-// Reduction (README "Reduction rules"): a node's broker session is a held
-// duplex connection you produce into (PUBLISH) and consume from (deliveries) —
-// that is the CHANNEL atom, bidi_command, and nothing else. Unlike git
-// (gitbroker), MQTT does NOT collapse CHANNEL into CALL: the connection is
-// real, the broker pushes, and a receipt reaches the far end without polling.
-// What rides on the channel is a dialect: an envelope names an atom (a CALL
-// as httpx.Request, or a CHANNEL command as {session, method, params}) and
-// the host fires it through the witness so the receipt carries X-8-Witness.
+// Reduction (README "Reduction rules"), stated honestly: the broker session
+// is CHANNEL-SHAPED — a held duplex TCP connection the node produces into
+// (PUBLISH) and consumes from (deliveries), so the broker pushes and a receipt
+// reaches the far end without polling (unlike gitbroker). But that connection
+// is the ADAPTER's, not the wire's: it is never exposed as a bidi_command
+// socket, and nothing this adapter puts on the wire is a bidi_command.
+// Everything the host fires is a CALL (http_request) to the witness — a CALL
+// envelope via POST /fetch, and a "channel" envelope via POST /run?session=,
+// where the WITNESS holds the BiDi socket. So at the wire, mqtt reduces to
+// CALL; the CHANNEL is the transport's shape and the delivery semantics
+// (push, retain, persistent session), not a wire atom this adapter emits.
+// What rides on the session is a dialect: an envelope names an atom (a CALL
+// as httpx.Request, or a seat-addressed command as {session, method, params})
+// and the host fires it through the witness so the receipt carries X-8-Witness.
 //
 // Delivery: QoS 1 both ways (the broker owns delivery once it PUBACKs), receipts
 // RETAINED (a far end that was away still finds its answer), persistent
@@ -33,11 +39,16 @@
 // deliberately not offered; exactly-once belongs to the receipt, not the
 // transport.
 //
-// Trust, both directions ("policy-gated to/from"): the far end only PROPOSES;
-// the host's Policy decides what fires (inbound gate) AND what the receipt may
-// carry back toward a broker it does not own (egress gate: body/headers).
-// Credentials never enter a topic: an envelope names an auth_slot the host
-// resolves from its own slots file; Validate rejects Authorization outright.
+// Trust, both directions ("policy-gated to/from", internal/guard, #1145):
+// the far end only PROPOSES; the host's Policy decides what fires (inbound
+// gate) AND what the receipt may carry back toward a broker it does not own
+// (egress gate). -policy is required and a missing file is CLOSED. An
+// envelope's request headers are an ALLOWLIST and its URL is checked
+// structurally (no user:key@host, no ?access_key=); auth is an auth_slot NAME
+// the host resolves from its own slots file. A receipt echoes only
+// Content-Type / Content-Length / X-8-* response headers, and a
+// slot-authenticated call publishes only the body's sha256 unless the policy
+// opts in (egress.authenticated_body).
 //
 // Nothing is hardcoded: broker URL, topic prefix, node name, credentials,
 // collector are per-node Config (cmd/mqtt: flags with MQTT_* fallbacks).
@@ -56,6 +67,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rrrishi123/adapters/internal/guard"
 	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/trace"
 )
@@ -122,11 +134,9 @@ func (e *Envelope) Validate() error {
 		if e.Call.Method == "" {
 			e.Call.Method = "GET"
 		}
-		for k := range e.Call.Headers {
-			lk := strings.ToLower(k)
-			if lk == "authorization" || lk == "proxy-authorization" || lk == "cookie" {
-				return fmt.Errorf("mqtt: envelope carries a %s header — the broker is not yours; name an auth_slot instead", k)
-			}
+		// G4: header ALLOWLIST + structural URL check — the broker is not yours
+		if err := guard.CheckRequest(*e.Call); err != nil {
+			return fmt.Errorf("mqtt: envelope: %w", err)
 		}
 	case AtomChannel:
 		if e.Channel == nil || strings.TrimSpace(e.Channel.Session) == "" || strings.TrimSpace(e.Channel.Method) == "" {
@@ -173,11 +183,9 @@ func SafeID(s string) bool {
 }
 
 // Egress is the outbound gate: what a receipt may carry back toward the
-// broker. nil in a Decision means everything (body capped, headers included).
-type Egress struct {
-	Body    bool `json:"body"`    // include the response body (capped) — false = digest and length only
-	Headers bool `json:"headers"` // include response headers
-}
+// broker (guard.Egress). nil in a Decision means guard.DefaultEgress: capped
+// body for plain calls, ALLOWLISTED headers, digest-only for slot calls.
+type Egress = guard.Egress
 
 // Decision is the host's verdict on one envelope.
 type Decision struct {
@@ -239,13 +247,14 @@ type Receipt struct {
 	Call     *CallEcho    `json:"call,omitempty"`
 	Channel  *ChannelEcho `json:"channel,omitempty"`
 
-	Status     int               `json:"status,omitempty"`      // HTTP status of the afferent leg at the witness
-	LatencyMs  int64             `json:"latency_ms,omitempty"`  // measured at the host
-	BodyLen    int               `json:"body_len,omitempty"`    // full length before any cap
-	BodyDigest string            `json:"body_digest,omitempty"` // sha256 hex of the FULL body
-	Body       string            `json:"body,omitempty"`        // capped at Config.MaxBody; absent when egress.body=false
-	Truncated  bool              `json:"truncated,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"` // response headers (first value each); absent when egress.headers=false
+	Status        int               `json:"status,omitempty"`      // HTTP status of the afferent leg at the witness
+	LatencyMs     int64             `json:"latency_ms,omitempty"`  // measured at the host
+	BodyLen       int               `json:"body_len,omitempty"`    // full length before any cap
+	BodyDigest    string            `json:"body_digest,omitempty"` // sha256 hex of the FULL body
+	Body          string            `json:"body,omitempty"`        // capped at Config.MaxBody; absent when egress withholds it (always for auth_slot calls unless authenticated_body)
+	Truncated     bool              `json:"truncated,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`       // ALLOWLISTED response headers only: Content-Type, Content-Length, X-8-* (guard.ResponseHeaders); absent when egress.headers=false
+	Authenticated bool              `json:"authenticated,omitempty"` // the CALL was fired with a host-side auth_slot credential
 
 	Witness Witness `json:"witness"`
 	Error   string  `json:"error,omitempty"`

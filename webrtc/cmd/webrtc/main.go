@@ -1,4 +1,4 @@
-// webrtc — a configured signaling answerer or a CHANNEL command client.
+// webrtc — an experimental transport primitive: echo peer or CHANNEL client.
 // Endpoints are required flags/WEBRTC_ environment values; there are no
 // default signaling addresses or public STUN servers.
 package main
@@ -31,6 +31,18 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
+	// The stdlib-only parent loopback command invokes this separate binary.
+	// This self-contained demo ignores deployment flags and environment values.
+	if len(args) == 1 && args[0] == "loopback" {
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		detail, err := webrtc.Loopback(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(out, detail)
+		return err
+	}
 	fs := flag.NewFlagSet("webrtc", flag.ContinueOnError)
 	fs.SetOutput(diagnostic)
 	role := fs.String("role", os.Getenv("WEBRTC_ROLE"), "answer | dial (required); answer is an explicit echo demo")

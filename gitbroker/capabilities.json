@@ -1,22 +1,25 @@
 {
   "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp `transports` tool tells it git-broker is adapter-provided. Declares how this dialect maps down onto the wire's two atoms.",
   "transport": "gitbroker",
-  "status": "needs-adapter",
+  "status": "implemented",
+  "stdlib_only": true,
   "maps_to": {
-    "propose": "CALL (http_request) — the far end commits commands/<ulid>.json (an envelope carrying exactly one httpx.Request) into the shared bridge repo",
-    "fire": "CALL (http_request) — the poller fires the envelope's CALL through the witness (8 collector /fetch), which stamps X-8-Witness",
-    "receipt": "CALL (http_request) — the poller commits receipts/<ulid>.json back; the far end learns the outcome by pulling (a queue = CALL-post + CALL-poll)"
+    "propose": "CALL (http_request) \u2014 the far end commits commands/<ulid>.json (an envelope carrying exactly one httpx.Request) into the shared bridge repo",
+    "fire": "CALL (http_request) \u2014 the poller fires the envelope's CALL through the witness (8 collector /fetch), which stamps X-8-Witness",
+    "receipt": "CALL (http_request) \u2014 the poller commits receipts/<ulid>.json back; the far end learns the outcome by pulling (a queue = CALL-post + CALL-poll)"
   },
   "capability_shaped": [
     "envelope + receipt JSON schema (envelope.schema.json, receipt.schema.json)",
-    "store-and-forward over git commits (pull → process → commit → push), idempotent by receipt existence",
-    "authority split: far end PROPOSES, host-side Policy DECIDES (state/policy.json reference; HALT is a future Policy)",
-    "auth_slot resolution host-side (state/slots.json) — no credential ever enters the public bridge",
-    "thick receipts: status, headers, capped body + full-body sha256, latency, X-8-Witness/Ledger-Id/DMs"
+    "store-and-forward over git commits (pull \u2192 process \u2192 commit \u2192 push), idempotent by receipt existence",
+    "authority split: far end PROPOSES, host-side Policy DECIDES; -policy is REQUIRED, must live OUTSIDE the bridge checkout, and a missing file is CLOSED (no AllowAll default)",
+    "HALT: <bridge>/state/halt is the far end's revocation, checked immediately before EVERY fire; a halted poll leaves envelopes unanswered until it is lifted",
+    "auth_slot resolution host-side (-slots, must be OUTSIDE the bridge) \u2014 no credential ever enters the public bridge",
+    "inbound gate (internal/guard): request headers are an ALLOWLIST; URLs with userinfo or credential-named query params (?access_key=) are rejected structurally",
+    "thick receipts: status, ALLOWLISTED headers (Content-Type, Content-Length, X-8-*), capped body + full-body sha256, latency, X-8-Witness/Ledger-Id/DMs; a slot-authenticated call publishes only the digest unless the policy opts in (egress.authenticated_body)"
   ],
-  "why_not_wire": "A git repo is a substrate, not a shape. Reduction rule 4: a queue is CALL-post + CALL-poll for classification, never a CHANNEL in physics — a commit holds no connection, so CHANNEL collapses into CALL and the adapter must carry the whole afferent leg in the receipt. The wire only ever sees one http_request per envelope; git, schemas, policy and slot resolution are the adapter's.",
+  "why_not_wire": "A git repo is a substrate, not a shape. Reduction rule 4: a queue is CALL-post + CALL-poll for classification, never a CHANNEL in physics \u2014 a commit holds no connection, so CHANNEL collapses into CALL and the adapter must carry the whole afferent leg in the receipt. The wire only ever sees one http_request per envelope; git, schemas, policy and slot resolution are the adapter's.",
   "wire_atoms": [
     "http_request"
   ],
-  "shape_proven_by": "gitbroker_test.go — envelope committed into a temp bridge repo → polled → fired as one CALL through a witness stub (own both ends, stdlib + git binary) → thick receipt with the X-8-Witness line committed back; second poll is a no-op (idempotent). Also `loopback gitbroker`."
+  "shape_proven_by": "gitbroker_test.go \u2014 envelope committed into a temp bridge repo \u2192 polled \u2192 fired as one CALL through a witness stub (own both ends, stdlib + git binary) \u2192 thick receipt with the X-8-Witness line committed back; second poll is a no-op (idempotent). Security gate (#1145) proven: a policy/slots path inside the bridge refuses to start, a missing policy is closed, a Set-Cookie never enters the receipt, userinfo/?access_key=/X-Api-Key envelopes are refused, HALT stops the fire. Also `loopback gitbroker`."
 }

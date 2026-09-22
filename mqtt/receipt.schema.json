@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rrrishi123/adapters/mqtt/receipt.schema.json",
   "title": "mqtt receipt v1",
-  "description": "What the host publishes to <prefix>/receipts/<ulid> (QoS 1, RETAINED) for EVERY envelope (fired, refused, failed, unparseable). THICK on purpose: the far end learns the outcome from the receipt alone — status, headers, capped body + full-body digest, latency — plus the X-8-Witness reafference. Retained so a far end that was away still finds its answer. The host's Policy may gate egress (body/headers absent) toward a broker it does not own.",
+  "description": "What the host publishes to <prefix>/receipts/<ulid> (QoS 1, RETAINED) for EVERY envelope (fired, refused, failed, unparseable). THICK on purpose: the far end learns the outcome from the receipt alone — status, allowlisted headers, capped body + full-body digest, latency — plus the X-8-Witness reafference. Retained so a far end that was away still finds its answer. It travels a broker the host does not own: response headers are allowlisted (Content-Type, Content-Length, X-8-*), a slot-authenticated call publishes only the body's sha256 unless the policy opts in, and the host's Policy may withhold body/headers entirely (egress).",
   "type": "object",
   "required": ["schema", "contract", "ulid", "atom", "decision", "witness", "processed_at", "host", "route"],
   "additionalProperties": false,
@@ -21,16 +21,17 @@
       "additionalProperties": false,
       "properties": {
         "fired": { "type": "boolean" },
-        "policy": { "type": "string", "description": "Which gate decided: validate | expiry | auth-slot | <policy name>." },
+        "policy": { "type": "string", "description": "Which gate decided: validate | expiry | auth-slot | closed | <policy name>." },
         "reason": { "type": "string" },
         "egress": {
           "type": "object",
-          "description": "The outbound gate applied to this receipt (absent = full: capped body + headers).",
+          "description": "The outbound gate applied to this receipt (absent = default: capped body for plain calls, allowlisted headers, digest-only for auth_slot calls).",
           "required": ["body", "headers"],
           "additionalProperties": false,
           "properties": {
-            "body": { "type": "boolean" },
-            "headers": { "type": "boolean" }
+            "body": { "type": "boolean", "description": "Include the capped body for calls WITHOUT an auth_slot." },
+            "headers": { "type": "boolean", "description": "Include the ALLOWLISTED response headers." },
+            "authenticated_body": { "type": "boolean", "description": "Explicit opt-in: include the body of a slot-authenticated call. Default false = body_len + body_digest only." }
           }
         }
       }
@@ -59,9 +60,10 @@
     "latency_ms": { "type": "integer" },
     "body_len": { "type": "integer", "description": "Full body length before the cap." },
     "body_digest": { "type": "string", "description": "sha256 hex of the FULL body." },
-    "body": { "type": "string", "description": "Capped at the host's max-body; absent when egress.body=false." },
+    "body": { "type": "string", "description": "Capped at the host's max-body; absent when egress.body=false, and ABSENT for a slot-authenticated call unless egress.authenticated_body (the digest is always present)." },
     "truncated": { "type": "boolean" },
-    "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Response headers, first value each; absent when egress.headers=false." },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ALLOWLISTED response headers only, first value each: Content-Type, Content-Length, X-8-*. Set-Cookie, WWW-Authenticate and every other server header are never echoed. Absent when egress.headers=false." },
+    "authenticated": { "type": "boolean", "description": "True when the CALL was fired with a host-side auth_slot credential (so body is digest-only by default)." },
     "witness": {
       "type": "object",
       "description": "The reafference the 8 collector stamped on the response, verbatim.",

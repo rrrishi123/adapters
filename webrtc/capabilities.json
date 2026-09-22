@@ -1,7 +1,15 @@
 {
-  "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp transports tool tells it WebRTC is adapter-provided. Declares how this dialect maps down onto the wire's two atoms.",
+  "$comment": "Experimental transport PRIMITIVE, not a relay adapter. Provides a DataChannel and an echo peer only; the command shape does not imply witness, policy or application authentication.",
   "transport": "webrtc",
-  "status": "needs-adapter",
+  "status": "experimental-primitive",
+  "kind": "transport-primitive",
+  "stdlib_only": false,
+  "relay_adapter": false,
+  "limitations": [
+    "answer CLI is an echo peer only; no host-tool dispatch or relay envelope/receipt processing",
+    "no witness integration or X-8-Witness receipts; the loopback proves transport physics only",
+    "no policy gate, application authentication or auth-slot resolution; DTLS and TURN credentials are transport mechanisms"
+  ],
   "maps_to": {
     "session": "CHANNEL (bidi_command) — one held, reliable, ordered DataChannel; the node produces text commands and consumes responses and peer events",
     "signaling": "adapter-owned setup CALL (httpx.Do) — POST application/sdp with gathered ICE candidates; receive application/sdp answer; SDP/ICE/DTLS/SCTP negotiation never enters the wire API",
@@ -16,7 +24,7 @@
     "per-node STUN/TURN configuration including TURN credentials; empty server list uses host candidates only",
     "explicit loopback-only mode excludes non-loopback local and remote ICE candidates and disables multicast DNS"
   ],
-  "why_not_wire": "SDP/ICE/DTLS/SCTP negotiation and NAT traversal are session capability, not a new transport shape. The adapter carries out a small httpx signaling CALL and presents the resulting held duplex DataChannel as CHANNEL (bidi_command). Signaling is setup, not a second exposed wire atom. The wire never sees SDP. Media/SRTP is not implemented by this DataChannel adapter.",
+  "why_not_wire": "SDP/ICE/DTLS/SCTP negotiation and NAT traversal are session capability, not a new transport shape. This primitive carries out a small httpx signaling CALL and exposes the resulting held duplex DataChannel with bidi_command-shaped exchanges. It is not a witnessed, policy-gated or authenticated relay adapter. Signaling is setup, not a second exposed wire atom. The wire never sees SDP. Media/SRTP is not implemented.",
   "wire_atoms": [
     "bidi_command"
   ],
