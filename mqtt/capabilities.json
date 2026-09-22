@@ -1,20 +1,35 @@
 {
-  "$comment": "Per-dialect capability descriptor. Read after the http-mcp `transports` tool flags MQTT as adapter-provided.",
+  "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp `transports` tool tells it MQTT is adapter-provided. Declares how this dialect maps down onto the wire's two atoms.",
   "transport": "mqtt",
   "status": "needs-adapter",
   "maps_to": {
-    "subscribe": "CHANNEL (bidi_command) — a long-lived connection to the broker; messages arrive as channel frames",
-    "publish": "CALL (http_request semantics) — fire one message into a topic"
+    "session": "CHANNEL (bidi_command) — one held connection to the broker per node, dialled OUT (no inbound port; sandbox-safe); the node produces into it (PUBLISH) and consumes from it (deliveries)",
+    "commands": "frames on the CHANNEL — the far end publishes an envelope to <prefix>/commands/<ulid> (QoS 1) proposing ONE wire atom: a CALL (http_request shape) or a seat-addressed CHANNEL command (bidi_command shape)",
+    "receipts": "frames on the CHANNEL — the host fires the atom through the witness (8 collector /fetch or /run) and publishes a thick receipt, X-8-Witness inside, to <prefix>/receipts/<ulid> (QoS 1, RETAINED)",
+    "presence": "frames on the CHANNEL — <prefix>/presence/<node>, retained + last-will: the held connection made visible to the other side"
   },
   "capability_shaped": [
-    "topic hierarchy + wildcard routing",
-    "QoS levels (0/1/2) + delivery guarantees",
-    "retain flag, last-will, keep-alive"
+    "topic hierarchy + '+'/'#' wildcard routing (<prefix>/{commands,receipts,presence}/...)",
+    "QoS 1 at-least-once (PUBACK) both ways; QoS 2 deliberately not offered — exactly-once belongs to the receipt (idempotent by ULID), not the transport",
+    "retain: receipts and presence are retained, so a far end that was away still finds its answer",
+    "persistent session (CleanSession=false) on the host: the broker queues commands while the host is down — store-and-forward without polling",
+    "keep-alive (PINGREQ/PINGRESP), last-will presence, username/password, TLS (mqtts://, CA file)",
+    "envelope + receipt JSON schema (envelope.schema.json, receipt.schema.json)",
+    "authority split: far end PROPOSES, host-side Policy DECIDES what fires (inbound) and what the receipt may carry back (egress: body/headers)",
+    "auth_slot resolution host-side (slots file) — no credential ever enters a topic"
   ],
-  "why_not_wire": "Topic routing and QoS are application-level delivery logic, not a transport shape. The adapter holds the broker connection and exposes CHANNEL frames; the wire never learns about topics.",
+  "why_not_wire": "A broker session IS a held duplex connection, so MQTT reduces to the CHANNEL atom and nothing else — but topics, QoS, retain, wills and persistent sessions are application delivery logic, not a transport shape. The adapter holds the broker connection, routes envelopes and receipts by topic, and presents CHANNEL frames upward; the wire never learns about topics. (Contrast gitbroker: a commit holds no connection, so git collapses CHANNEL into CALL. A broker pushes, so here the far end gets its receipt without polling.)",
   "wire_atoms": [
-    "bidi_command",
-    "http_request"
+    "bidi_command"
   ],
-  "shape_proven_by": "mqtt_test.go — subscribe=CHANNEL, publish=CALL over real MQTT 3.1.1 framing; own both ends (broker+client), stdlib. QoS1/2, retain, will remain the adapter's job."
+  "carries": {
+    "call": "http_request — fired by the host via the witness POST /fetch",
+    "channel": "bidi_command — fired by the host via the witness POST /run?session=<seat> (the far end names a seat, never a ws_url)"
+  },
+  "config": {
+    "per_node": ["-broker / MQTT_BROKER (mqtt:// | mqtts://)", "-prefix / MQTT_PREFIX", "-node / MQTT_NODE", "-username -password / MQTT_USERNAME MQTT_PASSWORD", "-ca -tls-insecure / MQTT_CA MQTT_TLS_INSECURE", "-qos -keepalive / MQTT_QOS MQTT_KEEPALIVE"],
+    "host_only": ["-collector / MQTT_COLLECTOR", "-actor / MQTT_ACTOR", "-policy / MQTT_POLICY", "-slots / MQTT_SLOTS", "-max-body"],
+    "hardcoded": "nothing"
+  },
+  "shape_proven_by": "mqtt_test.go — both nodes dial out to a broker we own (broker.go, stdlib): a CALL envelope and a CHANNEL envelope each round-trip far end → broker → host → witness stub (X-8-Witness stamped) → retained receipt → far end; a command published while the host is DOWN is delivered when it returns (persistent session); a duplicate ULID is skipped; policy refuses and gates egress; a credential header is rejected; will/retain/wildcard/QoS1 proven at the client layer. Also `loopback mqtt`. Set MQTT_TEST_BROKER=mqtt://host:1883 to run the same round-trip against a real broker (mosquitto)."
 }

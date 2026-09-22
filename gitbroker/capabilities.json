@@ -1,0 +1,22 @@
+{
+  "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp `transports` tool tells it git-broker is adapter-provided. Declares how this dialect maps down onto the wire's two atoms.",
+  "transport": "gitbroker",
+  "status": "needs-adapter",
+  "maps_to": {
+    "propose": "CALL (http_request) — the far end commits commands/<ulid>.json (an envelope carrying exactly one httpx.Request) into the shared bridge repo",
+    "fire": "CALL (http_request) — the poller fires the envelope's CALL through the witness (8 collector /fetch), which stamps X-8-Witness",
+    "receipt": "CALL (http_request) — the poller commits receipts/<ulid>.json back; the far end learns the outcome by pulling (a queue = CALL-post + CALL-poll)"
+  },
+  "capability_shaped": [
+    "envelope + receipt JSON schema (envelope.schema.json, receipt.schema.json)",
+    "store-and-forward over git commits (pull → process → commit → push), idempotent by receipt existence",
+    "authority split: far end PROPOSES, host-side Policy DECIDES (state/policy.json reference; HALT is a future Policy)",
+    "auth_slot resolution host-side (state/slots.json) — no credential ever enters the public bridge",
+    "thick receipts: status, headers, capped body + full-body sha256, latency, X-8-Witness/Ledger-Id/DMs"
+  ],
+  "why_not_wire": "A git repo is a substrate, not a shape. Reduction rule 4: a queue is CALL-post + CALL-poll for classification, never a CHANNEL in physics — a commit holds no connection, so CHANNEL collapses into CALL and the adapter must carry the whole afferent leg in the receipt. The wire only ever sees one http_request per envelope; git, schemas, policy and slot resolution are the adapter's.",
+  "wire_atoms": [
+    "http_request"
+  ],
+  "shape_proven_by": "gitbroker_test.go — envelope committed into a temp bridge repo → polled → fired as one CALL through a witness stub (own both ends, stdlib + git binary) → thick receipt with the X-8-Witness line committed back; second poll is a no-op (idempotent). Also `loopback gitbroker`."
+}

@@ -8,6 +8,10 @@ mkdir -p .bin
 go build -o .bin/browser  ./browser/cmd/browser    # firefox/chrome seat (BiDi/CDP)
 go build -o .bin/byod     ./byod/cmd/byod
 go build -o .bin/loopback ./cmd/loopback
+go build -o .bin/gitbroker ./gitbroker/cmd/gitbroker   # store-and-forward relay (CALL adapter)
+go build -o .bin/mqtt     ./mqtt/cmd/mqtt              # persistent broker relay (CHANNEL adapter)
+go build -o .bin/webrtc   ./webrtc/cmd/webrtc          # negotiated DataChannel (CHANNEL adapter)
 go build -o .bin/harvest  ./lambdatest/cmd/harvest
 go build -o .bin/matrix   ./lambdatest/cmd/matrix
-echo "built: $root/.bin/{browser,byod,loopback,harvest,matrix}"
+echo "built: $root/.bin/{browser,byod,loopback,gitbroker,mqtt,harvest,matrix}"
+echo "built: $root/.bin/webrtc"
