@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rrrishi123/adapters/mqtt/receipt.schema.json",
+  "title": "mqtt receipt v1",
+  "description": "What the host publishes to <prefix>/receipts/<ulid> (QoS 1, RETAINED) for EVERY envelope (fired, refused, failed, unparseable). THICK on purpose: the far end learns the outcome from the receipt alone — status, allowlisted headers, capped body + full-body digest, latency — plus the X-8-Witness reafference. Retained so a far end that was away still finds its answer. It travels a broker the host does not own: response headers are allowlisted (Content-Type, Content-Length, X-8-*), a slot-authenticated call publishes only the body's sha256 unless the policy opts in, and the host's Policy may withhold body/headers entirely (egress).",
+  "type": "object",
+  "required": ["schema", "contract", "ulid", "atom", "decision", "witness", "processed_at", "host", "route"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "mqtt/receipt/v1" },
+    "contract": { "type": "string", "description": "trace.Version — the wire contract version the host speaks." },
+    "ulid": { "type": "string" },
+    "seq": { "type": "integer" },
+    "agent": { "type": "string" },
+    "atom": { "enum": ["call", "channel"] },
+    "why": { "type": "string" },
+    "decision": {
+      "type": "object",
+      "description": "The host's verdict. fired=false means the atom never left the host.",
+      "required": ["fired"],
+      "additionalProperties": false,
+      "properties": {
+        "fired": { "type": "boolean" },
+        "policy": { "type": "string", "description": "Which gate decided: validate | expiry | auth-slot | closed | <policy name>." },
+        "reason": { "type": "string" },
+        "egress": {
+          "type": "object",
+          "description": "The outbound gate applied to this receipt (absent = default: capped body for plain calls, allowlisted headers, digest-only for auth_slot calls).",
+          "required": ["body", "headers"],
+          "additionalProperties": false,
+          "properties": {
+            "body": { "type": "boolean", "description": "Include the capped body for calls WITHOUT an auth_slot." },
+            "headers": { "type": "boolean", "description": "Include the ALLOWLISTED response headers." },
+            "authenticated_body": { "type": "boolean", "description": "Explicit opt-in: include the body of a slot-authenticated call. Default false = body_len + body_digest only." }
+          }
+        }
+      }
+    },
+    "call": {
+      "type": "object",
+      "description": "Echo of a fired CALL. Headers are deliberately absent — after auth_slot resolution they hold a credential.",
+      "required": ["method", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string" },
+        "url": { "type": "string" }
+      }
+    },
+    "channel": {
+      "type": "object",
+      "description": "Echo of a fired CHANNEL command.",
+      "required": ["session", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "session": { "type": "string" },
+        "method": { "type": "string" }
+      }
+    },
+    "status": { "type": "integer", "description": "HTTP status of the afferent leg at the witness (the command's own result is in body)." },
+    "latency_ms": { "type": "integer" },
+    "body_len": { "type": "integer", "description": "Full body length before the cap." },
+    "body_digest": { "type": "string", "description": "sha256 hex of the FULL body." },
+    "body": { "type": "string", "description": "Capped at the host's max-body; absent when egress.body=false, and ABSENT for a slot-authenticated call unless egress.authenticated_body (the digest is always present)." },
+    "truncated": { "type": "boolean" },
+    "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ALLOWLISTED response headers only, first value each: Content-Type, Content-Length, X-8-*. Set-Cookie, WWW-Authenticate and every other server header are never echoed. Absent when egress.headers=false." },
+    "authenticated": { "type": "boolean", "description": "True when the CALL was fired with a host-side auth_slot credential (so body is digest-only by default)." },
+    "witness": {
+      "type": "object",
+      "description": "The reafference the 8 collector stamped on the response, verbatim.",
+      "additionalProperties": false,
+      "properties": {
+        "line": { "type": "string", "description": "X-8-Witness" },
+        "ledger_id": { "type": "string", "description": "X-8-Ledger-Id" },
+        "ledger": { "type": "string", "description": "X-8-Ledger" },
+        "dms": { "type": "string", "description": "X-8-DMs" }
+      }
+    },
+    "error": { "type": "string" },
+    "processed_at": { "type": "string", "format": "date-time" },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "node": { "type": "string", "description": "The host's node name (its MQTT client id)." },
+        "actor": { "type": "string", "description": "X-8-Actor declared on the fire." },
+        "host": { "type": "string", "description": "OS hostname." }
+      }
+    },
+    "route": {
+      "type": "object",
+      "description": "How the receipt itself travelled — the app-routing knobs made visible.",
+      "required": ["topic", "qos", "retain"],
+      "additionalProperties": false,
+      "properties": {
+        "topic": { "type": "string" },
+        "qos": { "type": "integer", "enum": [0, 1] },
+        "retain": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -66,7 +66,7 @@ func main() {
 		url := fs.String("url", "about:blank", "initial url")
 		bin := fs.String("bin", "", "browser/driver binary (default: resolve from --engine)")
 		broker := fs.Int("broker", 0, "suggested channel broker port for the hint (default 4446 chrome, 4445 firefox)")
-		profile := fs.String("profile", "", "firefox: profile dir (default ~/.ltqa-firefox-deepseek — the persistent logged-in seat)")
+		profile := fs.String("profile", "", "firefox: profile dir (default ~/.8/firefox-profile — our own fresh seat)")
 		fs.Parse(os.Args[2:])
 		var rr *RunResult
 		var err error
@@ -160,7 +160,7 @@ func upFirefox(bin string, port int, profile string, brokerPort int) (*RunResult
 		}
 	}
 	if profile == "" {
-		profile = os.Getenv("HOME") + "/.ltqa-firefox-deepseek"
+		profile = os.Getenv("HOME") + "/.8/firefox-profile" // OUR fresh seat, nothing external
 	}
 
 	// replace any stale seat on this port — same restart-fresh semantics as up.sh had.
@@ -244,23 +244,22 @@ func downFirefox(port int) map[string]any {
 		return e == nil
 	}()
 	err := exec.Command("pkill", "-f", fmt.Sprintf("geckodriver --port %d", port)).Run()
-	_ = exec.Command("pkill", "-f", "firefox.*ltqa-firefox").Run()
+	_ = exec.Command("pkill", "-f", "firefox.*8/firefox-profile").Run() // our own seat marker
 	_ = os.Remove(seatFile())
 	res["reclaimed"] = err == nil
 	return res
 }
 
-// resolveGecko — PATH first, then the driver lent from ltqa-platform (all local
-// browser drivers are borrowed from there today; http-mcp needs them all).
+// resolveGecko — DISCOVER geckodriver on the host, don't inscribe a path. PATH
+// only (probe, don't assume); absent -> a clear error, never a hardcoded office
+// fallback. This is the discovered-substrate rule: the seat simply doesn't come
+// up where geckodriver isn't installed (degraded-but-valid), and the operator can
+// always override with --bin.
 func resolveGecko() (string, error) {
 	if p, err := exec.LookPath("geckodriver"); err == nil {
 		return p, nil
 	}
-	lent := os.Getenv("HOME") + "/Desktop/repos/ltqa-platform/.bin/drivers/firefox/0.37.0/geckodriver"
-	if _, err := os.Stat(lent); err == nil {
-		return lent, nil
-	}
-	return "", fmt.Errorf("no geckodriver on PATH and none lent at %s — pass --bin", lent)
+	return "", fmt.Errorf("geckodriver not found on PATH — install it or pass --bin <path>")
 }
 
 // up — launch the browser with CDP and resolve a page websocket to broker.
@@ -279,13 +278,23 @@ func up(engine, bin string, port int, url string, brokerPort int) (*RunResult, e
 		"--user-data-dir=" + profile,
 		"--no-first-run", "--no-default-browser-check", "--disable-features=Translate",
 		"--remote-allow-origins=*", // CDP refuses ws upgrades from unlisted origins since Chrome 111
-		url,
 	}
+	// container launch path: chrome can't sandbox in a container, /dev/shm is tiny
+	// there, and there is no display — but only on Linux (macOS has a GUI even when
+	// DISPLAY is unset, so we must NOT force headless there). BROWSER_EXTRA_ARGS
+	// lets the operator add more (e.g. a proxy) without a code change.
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
+		args = append(args, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu")
+	}
+	args = append(args, strings.Fields(os.Getenv("BROWSER_EXTRA_ARGS"))...)
+	args = append(args, url) // url last, after any flags
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout, cmd.Stderr = nil, nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach: the seat's lifetime is its own, not the launching shell's (symmetric with upFirefox)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launch %s: %w", engine, err)
 	}
+	go cmd.Wait() // reap if it exits while we're alive; Setsid orphans it cleanly after
 	pid := cmd.Process.Pid
 
 	// poll CDP until the page target is up and exposes its websocket.
