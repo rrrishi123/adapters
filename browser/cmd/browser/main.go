@@ -278,13 +278,23 @@ func up(engine, bin string, port int, url string, brokerPort int) (*RunResult, e
 		"--user-data-dir=" + profile,
 		"--no-first-run", "--no-default-browser-check", "--disable-features=Translate",
 		"--remote-allow-origins=*", // CDP refuses ws upgrades from unlisted origins since Chrome 111
-		url,
 	}
+	// container launch path: chrome can't sandbox in a container, /dev/shm is tiny
+	// there, and there is no display — but only on Linux (macOS has a GUI even when
+	// DISPLAY is unset, so we must NOT force headless there). BROWSER_EXTRA_ARGS
+	// lets the operator add more (e.g. a proxy) without a code change.
+	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
+		args = append(args, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu")
+	}
+	args = append(args, strings.Fields(os.Getenv("BROWSER_EXTRA_ARGS"))...)
+	args = append(args, url) // url last, after any flags
 	cmd := exec.Command(bin, args...)
 	cmd.Stdout, cmd.Stderr = nil, nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach: the seat's lifetime is its own, not the launching shell's (symmetric with upFirefox)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launch %s: %w", engine, err)
 	}
+	go cmd.Wait() // reap if it exits while we're alive; Setsid orphans it cleanly after
 	pid := cmd.Process.Pid
 
 	// poll CDP until the page target is up and exposes its websocket.
