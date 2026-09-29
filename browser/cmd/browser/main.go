@@ -66,14 +66,15 @@ func main() {
 		url := fs.String("url", "about:blank", "initial url")
 		bin := fs.String("bin", "", "browser/driver binary (default: resolve from --engine)")
 		broker := fs.Int("broker", 0, "suggested channel broker port for the hint (default 4446 chrome, 4445 firefox)")
-		profile := fs.String("profile", "", "firefox: profile dir (default ~/.8/firefox-profile — our own fresh seat)")
+		profile := fs.String("profile", "", "persistent profile dir (default: isolated per engine/port)")
+		headless := fs.Bool("headless", runtime.GOOS == "linux", "Chrome: no desktop/display (default true on Linux; mac cutover is explicit)")
 		fs.Parse(os.Args[2:])
 		var rr *RunResult
 		var err error
 		if *engine == "firefox" {
 			rr, err = upFirefox(*bin, orDefault(*port, 4444), *profile, orDefault(*broker, 4445))
 		} else {
-			rr, err = up(*engine, *bin, orDefault(*port, 9333), *url, orDefault(*broker, 4446))
+			rr, err = up(*engine, *bin, orDefault(*port, 9333), *url, orDefault(*broker, 4446), *profile, *headless)
 		}
 		if err != nil {
 			fail(err.Error())
@@ -263,7 +264,7 @@ func resolveGecko() (string, error) {
 }
 
 // up — launch the browser with CDP and resolve a page websocket to broker.
-func up(engine, bin string, port int, url string, brokerPort int) (*RunResult, error) {
+func up(engine, bin string, port int, url string, brokerPort int, profile string, headless bool) (*RunResult, error) {
 	if bin == "" {
 		var err error
 		if bin, err = resolveBin(engine); err != nil {
@@ -272,19 +273,22 @@ func up(engine, bin string, port int, url string, brokerPort int) (*RunResult, e
 	}
 	// a dedicated profile so this SUBJECT browser is isolated from any cockpit
 	// browser (and from the user's daily Chrome) — same hygiene as byod's per-run.
-	profile := fmt.Sprintf("%s/.8-browser-%s-%d", os.Getenv("HOME"), engine, port)
+	if profile == "" {
+		profile = fmt.Sprintf("%s/.8-browser-%s-%d", os.Getenv("HOME"), engine, port)
+	}
 	args := []string{
 		fmt.Sprintf("--remote-debugging-port=%d", port),
 		"--user-data-dir=" + profile,
 		"--no-first-run", "--no-default-browser-check", "--disable-features=Translate",
 		"--remote-allow-origins=*", // CDP refuses ws upgrades from unlisted origins since Chrome 111
 	}
-	// container launch path: chrome can't sandbox in a container, /dev/shm is tiny
-	// there, and there is no display — but only on Linux (macOS has a GUI even when
-	// DISPLAY is unset, so we must NOT force headless there). BROWSER_EXTRA_ARGS
-	// lets the operator add more (e.g. a proxy) without a code change.
-	if runtime.GOOS == "linux" && os.Getenv("DISPLAY") == "" {
-		args = append(args, "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu")
+	// Linux agent seats default to headless even when DISPLAY is inherited from
+	// a desktop. The mac cockpit requires an explicit --headless cutover.
+	if headless {
+		args = append(args, "--headless=new", "--window-size=1440,900")
+	}
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		args = append(args, "--no-sandbox")
 	}
 	args = append(args, strings.Fields(os.Getenv("BROWSER_EXTRA_ARGS"))...)
 	args = append(args, url) // url last, after any flags
