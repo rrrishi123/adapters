@@ -24,7 +24,39 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"strings"
 )
+
+// Version is the contract version this package speaks. The shared README
+// ("Versioning") promises a separately-versioned contract that each arm
+// declares and the replay runner checks before replaying — this constant is
+// that version. Every Frame a Writer emits is stamped with it (Contract), and
+// Compatible tells a reader whether a trace's stamp is one it can replay.
+// Baseline v0.0.2, matching the documented baseline across all four arms.
+//
+// TODO(contract-dedup): http-mcp/contract.Version is the canonical constant;
+// this literal duplicates it because adapters is a zero-dependency module and
+// importing http-mcp/contract would add a new adapters→http-mcp module arrow.
+// Until that arrow is decided, bump BOTH in lockstep.
+const Version = "v0.0.2"
+
+// Compatible reports whether a trace stamped v can be replayed by this
+// package: same major.minor. A missing stamp (a pre-v0.0.2 trace) is
+// compatible — the format did not change, only the stamp arrived.
+func Compatible(v string) bool {
+	if v == "" {
+		return true
+	}
+	return majorMinor(v) == majorMinor(Version)
+}
+
+func majorMinor(v string) string {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.LastIndexByte(v, '.'); i > 0 {
+		return v[:i]
+	}
+	return v
+}
 
 // Mode is the interaction mode an atom uses (not a transport — transports are
 // dialects of these two). CALL = one request -> one response. CHANNEL = a held
@@ -44,11 +76,12 @@ const (
 
 // Frame is one neutral event in a recorded session.
 type Frame struct {
-	Seq     int    `json:"seq"`               // monotonic order within a session
-	TS      int64  `json:"ts"`                // unix millis at observation
-	Session string `json:"session"`           // opaque id for one held context / build
-	Mode    string `json:"mode"`              // ModeCall | ModeChannel
-	Dir     string `json:"dir"`               // DirEfferent | DirAfferent
+	Contract string `json:"contract,omitempty"` // Version at emission; a reader checks Compatible
+	Seq      int    `json:"seq"`                // monotonic order within a session
+	TS       int64  `json:"ts"`                 // unix millis at observation
+	Session  string `json:"session"`            // opaque id for one held context / build
+	Mode     string `json:"mode"`               // ModeCall | ModeChannel
+	Dir      string `json:"dir"`                // DirEfferent | DirAfferent
 
 	// CALL mode
 	Method string `json:"method,omitempty"` // efferent: HTTP method
@@ -74,9 +107,11 @@ type Writer struct {
 // NewWriter wraps w for NDJSON frame emission.
 func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
 
-// Emit assigns the next sequence number and writes the frame as one JSON line.
-// The caller sets Mode/Dir/payload; Seq is owned by the Writer.
+// Emit assigns the next sequence number, stamps the contract Version, and
+// writes the frame as one JSON line. The caller sets Mode/Dir/payload; Seq
+// and Contract are owned by the Writer.
 func (e *Writer) Emit(f Frame) error {
+	f.Contract = Version
 	f.Seq = e.seq
 	e.seq++
 	b, err := json.Marshal(f)

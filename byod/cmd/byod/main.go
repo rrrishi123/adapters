@@ -33,7 +33,7 @@ type RunResult struct {
 	SessionID string `json:"session_id"`
 	Platform  string `json:"platform"` // android | ios
 	Device    string `json:"device"`   // udid
-	HubURL    string `json:"hub_url"`   // appium base, e.g. http://127.0.0.1:4723
+	HubURL    string `json:"hub_url"`  // appium base, e.g. http://127.0.0.1:4723
 	Stream    string `json:"stream,omitempty"`
 	Transport string `json:"transport"` // "call" (W3C/Appium over HTTP)
 	// IproxyPID: the iOS mjpeg forwarder MUST outlive this CLI (so the stream
@@ -207,4 +207,3 @@ func trim(s string, n int) string {
 	}
 	return s
 }
-

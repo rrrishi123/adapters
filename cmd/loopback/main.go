@@ -3,14 +3,19 @@
 // makes the cockpit's WIRE pane rows for grpc/mqtt/webrtc/unix genuinely
 // fireable: the 8 collector execs `loopback <transport>` and witnesses the
 // result into the feed. Same harnesses the conformance tests prove, packaged
-// for runtime: we are BOTH ends, stdlib only.
+// for runtime: we are BOTH ends (WebRTC uses Pion for ICE/DTLS/SCTP).
 //
 //	loopback grpc    → unary=CALL + server-stream=CHANNEL over real HTTP/2
-//	loopback mqtt    → publish=CALL reaches subscribe=CHANNEL via a real
-//	                   MQTT 3.1.1 broker we host in-process
-//	loopback webrtc  → SDP offer→answer over a real signaling CALL (the only
-//	                   wire-visible surface; DTLS/SCTP stays adapter-interior)
+//	loopback mqtt    → the persistent broker relay: a far end and a host both
+//	                   dial OUT to an MQTT 3.1.1 broker we host in-process; a
+//	                   CALL envelope (QoS 1) is fired through a witness stub and
+//	                   answered by a retained receipt (X-8-Witness inside)
+//	loopback webrtc  → real DataChannel: one httpx signaling CALL, then three
+//	                   CHANNEL commands + a peer event; localhost, no STUN
 //	loopback unix    → the same CALL bytes over a unix-domain socket (no TCP)
+//	loopback gitbroker → an envelope committed into a temp bridge repo is polled,
+//	                   fired as one CALL through a witness stub, and a thick
+//	                   receipt (X-8-Witness inside) is committed back
 //
 // Output: one JSON line {transport, ok, ms, detail} on stdout; exit 1 on fail.
 package main
@@ -24,13 +29,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/rrrishi123/adapters/gitbroker"
 	"github.com/rrrishi123/adapters/grpc"
+	"github.com/rrrishi123/adapters/internal/httpx"
 	"github.com/rrrishi123/adapters/mqtt"
-	"github.com/rrrishi123/adapters/webrtc"
 )
 
 type result struct {
@@ -42,7 +49,7 @@ type result struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: loopback <grpc|mqtt|webrtc|unix>")
+		fmt.Fprintln(os.Stderr, "usage: loopback <grpc|mqtt|webrtc|unix|gitbroker>")
 		os.Exit(2)
 	}
 	t0 := time.Now()
@@ -57,6 +64,8 @@ func main() {
 		detail, err = fireWebRTC()
 	case "unix":
 		detail, err = fireUnix()
+	case "gitbroker":
+		detail, err = fireGitbroker()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown transport "+os.Args[1])
 		os.Exit(2)
@@ -90,60 +99,69 @@ func fireGRPC() (string, error) {
 	return fmt.Sprintf("unary CALL %q · server-stream CHANNEL %d frames over h2", echo, len(frames)), nil
 }
 
-// fireMQTT — in-process MQTT 3.1.1 broker; a publish (CALL) must arrive on a
-// held subscription (CHANNEL).
+// fireMQTT — the persistent broker relay with both ends owned: an in-process
+// MQTT 3.1.1 broker, a host node that holds a persistent subscription and
+// fires through a witness stub, and a far-end node that proposes one CALL
+// envelope and consumes the retained receipt. Both nodes only dial OUT.
 func fireMQTT() (string, error) {
 	br, err := mqtt.NewBroker()
 	if err != nil {
 		return "", err
 	}
 	defer br.Close()
-	sub, err := mqtt.Dial(br.Addr(), "sub")
-	if err != nil {
-		return "", fmt.Errorf("subscriber: %w", err)
-	}
-	defer sub.Close()
-	ch, err := sub.Subscribe("wire/loopback")
-	if err != nil {
-		return "", fmt.Errorf("subscribe: %w", err)
-	}
-	pub, err := mqtt.Dial(br.Addr(), "pub")
-	if err != nil {
-		return "", fmt.Errorf("publisher: %w", err)
-	}
-	defer pub.Close()
-	if err := pub.Publish("wire/loopback", []byte("fired-by-8")); err != nil {
-		return "", fmt.Errorf("publish: %w", err)
-	}
-	select {
-	case m := <-ch:
-		return fmt.Sprintf("publish CALL → held CHANNEL delivered %q via our own broker", m), nil
-	case <-time.After(3 * time.Second):
-		return "", fmt.Errorf("message never arrived on the channel")
-	}
-}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"transport":"mqtt","ok":true}`)
+	}))
+	defer target.Close()
+	witness := httptest.NewServer(mqtt.WitnessStub())
+	defer witness.Close()
+	cfg := mqtt.Config{Broker: br.URL(), Prefix: "wire-loopback", Collector: witness.URL, KeepAlive: 5 * time.Second}
 
-// fireWebRTC — the signaling CALL (the wire's only WebRTC surface): POST a real
-// SDP offer, get a coherent answer (role flipped, own fingerprint).
-func fireWebRTC() (string, error) {
-	const fp = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
-	srv := httptest.NewServer(webrtc.SignalingHandler(fp))
-	defer srv.Close()
-	offer := webrtc.SDP{SessionID: "8", Setup: "actpass", Mid: "0", IceUfrag: "off8", IcePwd: "offererpassword8", Fingerprint: "01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF"}
-	resp, err := http.Post(srv.URL+"/signal", "application/sdp", strings.NewReader(offer.Marshal()))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	hcfg := cfg
+	hcfg.Node, hcfg.Actor = "loopback-host", "loopback-host"
+	host := &mqtt.Host{Config: hcfg, Policy: mqtt.AllowAll} // explicit: a nil Policy is Closed (#1145)
+	hctx, hstop := context.WithCancel(ctx)
+	hdone := make(chan error, 1)
+	go func() { hdone <- host.Serve(hctx) }()
+	defer func() { hstop(); <-hdone }()
+	select {
+	case <-host.Ready():
+	case err := <-hdone:
+		return "", fmt.Errorf("host: %w", err)
+	}
+
+	fcfg := cfg
+	fcfg.Node = "loopback-far-end"
+	env := &mqtt.Envelope{ULID: "loopback-1", Seq: 1, Atom: mqtt.AtomCall, Call: &httpx.Request{Method: "GET", URL: target.URL + "/ping"}, Why: "loopback"}
+	rec, err := (&mqtt.FarEnd{Config: fcfg}).Fire(ctx, env)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	ans, err := webrtc.ParseSDP(string(raw))
+	if !rec.Decision.Fired || rec.Status != 200 || rec.Witness.Line == "" || !rec.Route.Retain {
+		return "", fmt.Errorf("thin or missing receipt: fired=%v status=%d witness=%q retain=%v", rec.Decision.Fired, rec.Status, rec.Witness.Line, rec.Route.Retain)
+	}
+	if _, ok := br.Retained(rec.Route.Topic); !ok {
+		return "", fmt.Errorf("receipt not retained at the broker on %s", rec.Route.Topic)
+	}
+	return fmt.Sprintf("envelope → commands/%s (QoS 1) → host fired via witness → retained receipt on %s (%s)", env.ULID, rec.Route.Topic, rec.Witness.Line), nil
+}
+
+// fireWebRTC runs the separately built transport primitive beside this binary.
+// The process boundary keeps Pion out of the stdlib-only parent module.
+func fireWebRTC() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	executable, err := os.Executable()
 	if err != nil {
-		return "", fmt.Errorf("answer unparseable: %w", err)
+		return "", err
 	}
-	if ans.Setup != "active" || ans.Fingerprint != fp {
-		return "", fmt.Errorf("incoherent answer: setup=%s", ans.Setup)
+	out, err := exec.CommandContext(ctx, filepath.Join(filepath.Dir(executable), "webrtc"), "loopback").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("webrtc loopback (build both binaries with ./build.sh): %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return "SDP offer→answer CALL negotiated (role flipped actpass→active, peer fingerprint bound)", nil
+	return strings.TrimSpace(string(out)), nil
 }
 
 // fireUnix — the same CALL bytes over a unix-domain socket: no TCP port exists.
@@ -177,4 +195,52 @@ func fireUnix() (string, error) {
 		return "", fmt.Errorf("bad reply %d %s", resp.StatusCode, body)
 	}
 	return "CALL over a unix-domain socket round-tripped — no TCP port involved", nil
+}
+
+// fireGitbroker — the store-and-forward relay with both ends owned: a temp
+// bridge repo (git init, no remote), a far end that commits one envelope
+// proposing a CALL at a target we host, a witness stub that performs it and
+// stamps X-8-Witness, and the poller that commits the thick receipt back.
+func fireGitbroker() (string, error) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"transport":"gitbroker","ok":true}`)
+	}))
+	defer target.Close()
+	witness := httptest.NewServer(gitbroker.WitnessStub())
+	defer witness.Close()
+	dir, err := os.MkdirTemp("", "bridge-loopback")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	if err := gitbroker.InitLocal(dir); err != nil {
+		return "", err
+	}
+	b, err := gitbroker.Open(gitbroker.Config{Dir: dir, Collector: witness.URL, Actor: "loopback-far-end", PollInterval: time.Second})
+	if err != nil {
+		return "", err
+	}
+	env := gitbroker.Envelope{Schema: gitbroker.EnvelopeSchema, ULID: "loopback-1", Seq: 1, Agent: "loopback-far-end", Atom: gitbroker.AtomCall,
+		Call: httpx.Request{Method: "GET", URL: target.URL + "/ping"}, Why: "loopback"}
+	raw, _ := json.Marshal(env)
+	if err := os.WriteFile(filepath.Join(dir, "commands", env.ULID+".json"), raw, 0o644); err != nil {
+		return "", err
+	}
+	rep, err := (&gitbroker.Poller{Bridge: b, Policy: gitbroker.AllowAll}).Once(context.Background()) // explicit: a nil Policy is Closed (#1145)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(filepath.Join(dir, "receipts", env.ULID+".json"))
+	if err != nil {
+		return "", fmt.Errorf("no receipt: %w", err)
+	}
+	defer f.Close()
+	rec, err := gitbroker.ReadReceipt(f)
+	if err != nil {
+		return "", err
+	}
+	if !rec.Decision.Fired || rec.Status != 200 || rec.Witness.Line == "" || rep.Commit == "" {
+		return "", fmt.Errorf("thin or missing receipt: fired=%v status=%d witness=%q commit=%q", rec.Decision.Fired, rec.Status, rec.Witness.Line, rep.Commit)
+	}
+	return fmt.Sprintf("envelope → poll → CALL fired via witness → receipt committed %s (%s)", rep.Commit, rec.Witness.Line), nil
 }

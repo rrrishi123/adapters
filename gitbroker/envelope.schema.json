@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rrrishi123/adapters/gitbroker/envelope.schema.json",
+  "title": "gitbroker envelope v1",
+  "description": "One PROPOSED CALL, committed by the far end into the bridge repo as commands/<ulid>.json. A public artifact: it must never carry a credential (auth_slot is a NAME the poller resolves host-side). The far end proposes; the authoritative side's Policy decides.",
+  "type": "object",
+  "required": ["schema", "ulid", "seq", "atom", "call"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "gitbroker/envelope/v1" },
+    "ulid": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "description": "Id; also the file name. ULIDs sort by time, which is the poll order." },
+    "seq": { "type": "integer", "minimum": 0, "description": "The far end's monotonic sequence; a gap in receipts tells the far end something was lost." },
+    "agent": { "type": "string", "description": "Who proposes — provenance across the boundary; declared as X-8-Actor on the fire." },
+    "atom": { "const": "call", "description": "Git collapses CHANNEL into CALL: a bridge envelope is exactly one CALL. A channel op is proposed as a CALL to the witness (POST /run)." },
+    "call": {
+      "type": "object",
+      "description": "The CALL atom — identical to the wire's http_request shape (httpx.Request).",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "default": "GET" },
+        "url": { "type": "string", "format": "uri", "description": "http(s) only. Validate rejects userinfo (user:key@host) and credential-named query parameters (access_key, api_key, token, sig, ...) structurally." },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "ALLOWLIST (internal/guard.RequestHeaderAllow): Accept, Accept-Encoding, Accept-Language, Cache-Control, Content-Type, If-*, Range, User-Agent, X-Request-Id, X-Correlation-Id, X-8-*. Anything else (Authorization, Cookie, X-Api-Key, X-Auth-Token, ...) is rejected by Validate." },
+        "body": { "type": "string" }
+      }
+    },
+    "auth_slot": { "type": "string", "description": "Name of a host-side credential (state/slots.json). The value never crosses the bridge." },
+    "not_after": { "type": "string", "format": "date-time", "description": "A proposal that sat in git past this instant must not fire." },
+    "max_ms": { "type": "integer", "minimum": 0, "description": "Fire deadline hint in milliseconds; 0 = poller default." },
+    "why": { "type": "string", "description": "Free text; echoed into the receipt." },
+    "proposed_at": { "type": "string", "format": "date-time" }
+  }
+}
