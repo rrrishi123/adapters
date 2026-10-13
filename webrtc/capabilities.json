@@ -1,21 +1,45 @@
 {
-  "$comment": "Per-dialect capability descriptor. Read after the http-mcp `transports` tool flags WebRTC as adapter-provided. This is the clearest case of a capability-shaped transport.",
+  "$comment": "Experimental transport PRIMITIVE, not a relay adapter. Provides a DataChannel and an echo peer only; the command shape does not imply witness, policy or application authentication.",
   "transport": "webrtc",
-  "status": "needs-adapter",
+  "status": "experimental-primitive",
+  "kind": "transport-primitive",
+  "stdlib_only": false,
+  "relay_adapter": false,
+  "limitations": [
+    "answer CLI is an echo peer only; no host-tool dispatch or relay envelope/receipt processing",
+    "no witness integration or X-8-Witness receipts; the loopback proves transport physics only",
+    "no policy gate, application authentication or auth-slot resolution; DTLS and TURN credentials are transport mechanisms"
+  ],
   "maps_to": {
-    "signaling": "CALL (http_request) — exchange SDP offer/answer + ICE candidates over a plain HTTP endpoint",
-    "datachannel": "CHANNEL (bidi_command-like) — the negotiated DataChannel carries raw bytes once the handshake completes",
-    "media": "CHANNEL (afferent) — SRTP media stream, consumed like SSE/MJPEG"
+    "session": "CHANNEL (bidi_command) — one held, reliable, ordered DataChannel; the node produces text commands and consumes responses and peer events",
+    "signaling": "adapter-owned setup CALL (httpx.Do) — POST application/sdp with gathered ICE candidates; receive application/sdp answer; SDP/ICE/DTLS/SCTP negotiation never enters the wire API",
+    "commands": "frames on the CHANNEL — {id,method,params}, matching bidi_command; BidiCommand returns the matching id and delivers unmatched frames to an optional event callback",
+    "events": "frames on the CHANNEL — unsolicited peer text messages, available through ReadText or the command's event callback"
   },
   "capability_shaped": [
-    "SDP offer/answer negotiation",
-    "ICE candidate gathering + NAT traversal",
-    "DTLS-SRTP key exchange / encryption handshake"
+    "Pion WebRTC: real SDP offer/answer, non-trickle ICE gathering, candidate connectivity checks, DTLS fingerprint verification, SCTP and DCEP",
+    "one reliable, ordered DataChannel per peer connection; label configured on both nodes",
+    "wsx-style WriteText/ReadText/SetDeadline/Close; serialized writes, one reader, 64 KiB maximum text message, binary messages skipped on reads",
+    "bounded negotiation and signaling bodies; signaling server Close tears down its peers; caller closes the dialed channel",
+    "per-node STUN/TURN configuration including TURN credentials; empty server list uses host candidates only",
+    "explicit loopback-only mode excludes non-loopback local and remote ICE candidates and disables multicast DNS"
   ],
-  "why_not_wire": "SDP/ICE/DTLS negotiation is session capability, not a byte transport. The adapter does the handshake (signaled over an httpx CALL); only the resulting DataChannel/media is wire-like. The wire never sees SDP.",
+  "why_not_wire": "SDP/ICE/DTLS/SCTP negotiation and NAT traversal are session capability, not a new transport shape. This primitive carries out a small httpx signaling CALL and exposes the resulting held duplex DataChannel with bidi_command-shaped exchanges. It is not a witnessed, policy-gated or authenticated relay adapter. Signaling is setup, not a second exposed wire atom. The wire never sees SDP. Media/SRTP is not implemented.",
   "wire_atoms": [
-    "http_request",
     "bidi_command"
   ],
-  "shape_proven_by": "webrtc_test.go — SDP offer/answer over a real signaling CALL (the only wire-visible surface); own both ends. DTLS/ICE/SCTP DataChannel interior stays adapter-owned (pion), never seen by the wire."
+  "config": {
+    "per_node": [
+      "-role / WEBRTC_ROLE (answer | dial)",
+      "-signaling / WEBRTC_SIGNALING (dial: explicit HTTP(S) signaling endpoint)",
+      "-listen -signal-path / WEBRTC_LISTEN WEBRTC_SIGNAL_PATH (answer: explicit bind address and path)",
+      "-ice-servers / WEBRTC_ICE_SERVERS (JSON array of urls, username, credential; empty = no STUN/TURN)",
+      "-label / WEBRTC_LABEL",
+      "-timeout / WEBRTC_TIMEOUT",
+      "-loopback-only / WEBRTC_LOOPBACK_ONLY (true | false)"
+    ],
+    "command": ["-method -params / WEBRTC_METHOD WEBRTC_PARAMS", "-id (default 1)"],
+    "hardcoded": "no signaling endpoint, bind address, signaling path or ICE/STUN/TURN server"
+  },
+  "shape_proven_by": "webrtc_test.go and loopback webrtc — own both real Pion peers, exchange an offer/answer on localhost via one httpx CALL, then close the signaling HTTP server and exchange three id-matched CHANNEL commands plus a peer event over ICE/DTLS/SCTP. Only loopback candidates, no external STUN. Also tests deadlines, close, malformed signaling, cancellation and concurrent writers. The answer CLI is an explicit echo demonstration; applications install their own NewSignaler handler."
 }

@@ -1,20 +1,53 @@
 {
-  "$comment": "Per-dialect capability descriptor. Read after the http-mcp `transports` tool flags MQTT as adapter-provided.",
+  "$comment": "Per-dialect capability descriptor. An agent reads this AFTER the http-mcp `transports` tool tells it MQTT is adapter-provided. Declares how this dialect maps down onto the wire's two atoms \u2014 honestly: the broker session is CHANNEL-shaped, but every atom this adapter puts on the wire is a CALL (http_request) to the witness.",
   "transport": "mqtt",
-  "status": "needs-adapter",
+  "status": "implemented",
+  "stdlib_only": true,
   "maps_to": {
-    "subscribe": "CHANNEL (bidi_command) — a long-lived connection to the broker; messages arrive as channel frames",
-    "publish": "CALL (http_request semantics) — fire one message into a topic"
+    "session": "held broker connection, ADAPTER-INTERNAL \u2014 one TCP session per node, dialled OUT (no inbound port; sandbox-safe); the node produces into it (PUBLISH) and consumes from it (deliveries). It is never exposed upward as a bidi_command socket.",
+    "commands": "frames on the session \u2014 the far end publishes an envelope to <prefix>/commands/<ulid> (QoS 1) proposing ONE atom: a CALL (http_request shape) or a seat-addressed command ({session, method, params})",
+    "fire": "CALL (http_request) \u2014 the host fires EVERY envelope as an HTTP request to the witness: POST /fetch for a CALL, POST /run?session=<seat> for a seat-addressed command (the WITNESS holds the BiDi socket; the adapter never does)",
+    "receipts": "frames on the session \u2014 the host publishes a thick receipt, X-8-Witness inside, to <prefix>/receipts/<ulid> (QoS 1, RETAINED); the broker pushes it, so the far end needs no poll",
+    "presence": "frames on the session \u2014 <prefix>/presence/<node>, retained + last-will: the held connection made visible to the other side"
   },
   "capability_shaped": [
-    "topic hierarchy + wildcard routing",
-    "QoS levels (0/1/2) + delivery guarantees",
-    "retain flag, last-will, keep-alive"
+    "topic hierarchy + '+'/'#' wildcard routing (<prefix>/{commands,receipts,presence}/...)",
+    "QoS 1 at-least-once (PUBACK) both ways; QoS 2 deliberately not offered \u2014 exactly-once belongs to the receipt (idempotent by ULID), not the transport",
+    "retain: receipts and presence are retained, so a far end that was away still finds its answer",
+    "persistent session (CleanSession=false) on the host: the broker queues commands while the host is down \u2014 store-and-forward without polling",
+    "keep-alive (PINGREQ/PINGRESP), last-will presence, username/password, TLS (mqtts://, CA file)",
+    "envelope + receipt JSON schema (envelope.schema.json, receipt.schema.json)",
+    "authority split: far end PROPOSES, host-side Policy DECIDES what fires (inbound) and what the receipt may carry back (egress); -policy is REQUIRED and a missing file is CLOSED (no AllowAll default)",
+    "inbound gate (internal/guard): request headers are an ALLOWLIST; URLs with userinfo or credential-named query params (?access_key=) are rejected structurally",
+    "auth_slot resolution host-side (-slots, never published, kept out of any git working tree) \u2014 no credential ever enters a topic",
+    "egress gate: receipts echo only ALLOWLISTED response headers (Content-Type, Content-Length, X-8-*); a slot-authenticated call publishes only the body's sha256 unless the policy opts in (egress.authenticated_body)"
   ],
-  "why_not_wire": "Topic routing and QoS are application-level delivery logic, not a transport shape. The adapter holds the broker connection and exposes CHANNEL frames; the wire never learns about topics.",
+  "why_not_wire": "A broker session is a held duplex connection, so the TRANSPORT is CHANNEL-shaped \u2014 but topics, QoS, retain, wills and persistent sessions are application delivery logic, not a transport shape, and the session itself is the adapter's, never presented upward as a bidi_command. What actually reaches the wire from this adapter is one http_request per envelope (POST /fetch or POST /run at the witness): at the wire, mqtt reduces to CALL, exactly like gitbroker. The difference from gitbroker is delivery, not atoms: a broker PUSHES, so the far end gets its receipt without polling and a command queues at the broker while the host is down. The earlier claim that this adapter's wire atom is bidi_command was an overclaim (#1145).",
   "wire_atoms": [
-    "bidi_command",
     "http_request"
   ],
-  "shape_proven_by": "mqtt_test.go — subscribe=CHANNEL, publish=CALL over real MQTT 3.1.1 framing; own both ends (broker+client), stdlib. QoS1/2, retain, will remain the adapter's job."
+  "carries": {
+    "call": "http_request \u2014 fired by the host as a CALL to the witness, POST /fetch",
+    "channel": "a seat-addressed command {session, method, params} \u2014 fired by the host as a CALL to the witness, POST /run?session=<seat>; the witness's held BiDi socket does the channel work (the far end names a seat, never a ws_url, and this adapter never holds a bidi_command socket)"
+  },
+  "config": {
+    "per_node": [
+      "-broker / MQTT_BROKER (mqtt:// | mqtts://)",
+      "-prefix / MQTT_PREFIX",
+      "-node / MQTT_NODE",
+      "-username -password / MQTT_USERNAME MQTT_PASSWORD",
+      "-ca -tls-insecure / MQTT_CA MQTT_TLS_INSECURE",
+      "-qos -keepalive / MQTT_QOS MQTT_KEEPALIVE"
+    ],
+    "host_only": [
+      "-collector / MQTT_COLLECTOR",
+      "-actor / MQTT_ACTOR",
+      "-policy / MQTT_POLICY (required; missing = closed)",
+      "-slots / MQTT_SLOTS",
+      "-max-body"
+    ],
+    "hardcoded": "nothing"
+  },
+  "shape_proven_by": "mqtt_test.go \u2014 both nodes dial out to a broker we own (broker.go, stdlib): a CALL envelope and a seat-addressed command envelope each round-trip far end \u2192 broker \u2192 host \u2192 witness stub (X-8-Witness stamped; every fire is an http_request to the stub) \u2192 retained receipt \u2192 far end; a command published while the host is DOWN is delivered when it returns (persistent session); a duplicate ULID is skipped; policy refuses and gates egress; will/retain/wildcard/QoS1 proven at the client layer. Security gate (#1145) proven: a missing policy is closed, a nil policy is closed, a Set-Cookie never enters the receipt, userinfo/?access_key=/X-Api-Key envelopes are refused before publish, a slot-authenticated body is digest-only unless opted in. Also `loopback mqtt`. Set MQTT_TEST_BROKER=mqtt://host:1883 to run the same round-trip against a real broker (mosquitto).",
+  "transport_shape": "CHANNEL \u2014 a held duplex broker session per node (push delivery, retain, persistent session). This is the transport's shape and the adapter's delivery semantics; it is NOT a wire atom this adapter emits (see wire_atoms)."
 }

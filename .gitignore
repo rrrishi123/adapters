@@ -4,3 +4,11 @@ lambdatest/lt-spec-private.json
 test_logs/
 node_modules/
 /loopback
+
+# built binaries live in .bin/ (build.sh is THE build) — never track a host binary.
+# The three in-tree ones (browser/browser, harvest, matrix) were stale darwin/arm64
+# ad-hoc builds from Aug 13 (release-readiness item 1, audit Finding 2). Anchored.
+/.bin/
+/harvest
+/matrix
+/browser/browser
