@@ -32,13 +32,13 @@ import (
 // declares and the replay runner checks before replaying — this constant is
 // that version. Every Frame a Writer emits is stamped with it (Contract), and
 // Compatible tells a reader whether a trace's stamp is one it can replay.
-// Baseline v0.0.2, matching the documented baseline across all four arms.
+// v0.0.3 since the 2026-10-21 cut (baseline v0.0.2), in lockstep across all four arms.
 //
 // TODO(contract-dedup): http-mcp/contract.Version is the canonical constant;
 // this literal duplicates it because adapters is a zero-dependency module and
 // importing http-mcp/contract would add a new adapters→http-mcp module arrow.
 // Until that arrow is decided, bump BOTH in lockstep.
-const Version = "v0.0.2"
+const Version = "v0.0.3"
 
 // Compatible reports whether a trace stamped v can be replayed by this
 // package: same major.minor. A missing stamp (a pre-v0.0.2 trace) is

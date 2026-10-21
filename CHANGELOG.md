@@ -5,9 +5,15 @@ independently; the wire contract carries its own version (`contract.Version`
 in http-mcp, mirrored by `trace.Version` here until deduplicated). Tags are
 unsigned.
 
-## v0.0.3 (unreleased, branch `release/v0.0.2`)
+## v0.0.3 — 2026-10-21
 
 Release-readiness follow-ups to the v0.0.2 line:
+
+- **mqtt fixes**: a clean reconnect under the same client id no longer has its
+  new session deleted by the old connection's teardown (a far end that
+  reconnected quickly lost its receipt). The relay host counts a command before
+  publishing its receipt, so Stats agree with what the far end holds.
+- `trace.Version` is `v0.0.3`, in lockstep with http-mcp `contract.Version`.
 
 - **module hygiene** (#1146): WebRTC is an `experimental-primitive` echo peer,
   not a relay adapter: no witness, policy or application authentication.
