@@ -364,6 +364,18 @@ func (h *Host) Serve(ctx context.Context) error {
 				continue
 			}
 			rec := h.Process(ctx, ulid, m.Payload)
+			// count what Process did BEFORE the receipt goes out: a far end that has
+			// the receipt must already see it in Stats (it reads them on arrival)
+			h.count(func(s *Stats) {
+				switch {
+				case rec.Decision.Fired && rec.Error == "":
+					s.Fired++
+				case rec.Decision.Fired:
+					s.Errors++
+				default:
+					s.Refused++
+				}
+			})
 			raw, _ := json.Marshal(rec)
 			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := c.PublishMessage(pctx, Message{Topic: rec.Route.Topic, Payload: raw, QoS: rec.Route.QoS, Retain: rec.Route.Retain})
@@ -375,16 +387,6 @@ func (h *Host) Serve(ctx context.Context) error {
 				h.mu.Unlock()
 				return fmt.Errorf("mqtt host: publish receipt %s: %w", ulid, err)
 			}
-			h.count(func(s *Stats) {
-				switch {
-				case rec.Decision.Fired && rec.Error == "":
-					s.Fired++
-				case rec.Decision.Fired:
-					s.Errors++
-				default:
-					s.Refused++
-				}
-			})
 			h.logf("mqtt host: %s %s → fired=%v status=%d %s", ulid, describe(rec), rec.Decision.Fired, rec.Status, firstNonEmpty(rec.Error, rec.Decision.Reason, rec.Witness.Line))
 		}
 	}

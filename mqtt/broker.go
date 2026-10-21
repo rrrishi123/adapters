@@ -305,7 +305,9 @@ func (b *Broker) detach(s *session, gen int, graceful bool) {
 	s.wmu.Unlock()
 	will := s.will
 	s.will = nil
-	if s.clean {
+	// only if the map still holds THIS session: a clean reconnect under the same
+	// client id gets a fresh session (gen=1 again), which the old one must not evict
+	if s.clean && b.sessions[s.id] == s {
 		delete(b.sessions, s.id)
 	}
 	b.mu.Unlock()
