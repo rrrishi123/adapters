@@ -9,7 +9,7 @@ Linux (not just macOS) working since seats run cross-platform.
 
 ## Branch model
 
-Work targets `release/v0.0.2`. Do not push to `main` or mint tags without an
+Work targets `next`. Do not push to `main` or mint tags without an
 explicit release decision.
 
 ## Conventions
