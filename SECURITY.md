@@ -6,7 +6,7 @@ a LambdaTest catalog harvester and matrix runner).
 
 ## Supported versions
 
-Active development is on `release/v0.0.2`; security fixes land there first.
+Active development is on `next`; security fixes land there first.
 
 ## Trust & exposure model
 
