@@ -1,11 +1,40 @@
-# adapters — the PROVIDERS (4th arm)
+# adapters — the PROVIDERS (the ARMS)
 
-> Part of **The Wire** — a **witnessed substrate for agents**: two modes over a lean wire that any mind acts on, and a witness that makes agents continuous, auditable, and federated across hosts. (Record-and-replay test automation is one application, not the definition.)
-> **This repo is the adapters — the PROVIDERS (4th arm)** — per-provider spec/runner/upload/catalog + record->replay. The 4th arm.
+**Per-provider spec, runner, upload and catalog — capability composed above the wire, never baked into it.** An adapter speaks a provider's shape (LambdaTest, a browser seat, gRPC, MQTT, WebRTC, a git relay) and ends every one of them in the wire's two atoms: a **CALL** (`http_request`) or a **CHANNEL** command. The exotic framing lives here; the wire below stays provider-blind. The dependency arrow is one-way — adapters depend on the generic arms, the arms never learn a tenant.
+
+## Quick start
+
+```bash
+git clone https://github.com/rrrishi123/adapters && cd adapters
+./build.sh                       # builds .bin/{browser,byod,loopback,gitbroker,mqtt,harvest,matrix,webrtc} (first build fetches Go modules)
+.bin/loopback grpc               # hermetic own-both-ends round-trip: unary (CALL) + server-stream (CHANNEL) over real HTTP/2 — prints one JSON line, no creds
+```
+
+`loopback {grpc,mqtt,webrtc,unix,gitbroker}` fires each delegated transport end-to-end with no cloud account — the same harnesses the conformance tests prove, packaged to run. The cloud matrix (`.bin/matrix`) runs the real LambdaTest provider matrix and needs credentials.
+
+The parent Go module, including gitbroker and mqtt, uses only the standard
+library. WebRTC is a separate nested module with Pion dependencies and is an
+[experimental transport primitive](./webrtc/README.md), with an echo peer and
+no witness, policy or application authentication. `./build.sh` builds both
+modules; run Go checks from both the repository root and `webrtc/`.
+
+## What you get
+
+- **The specialty-parts bin** — strange provider shapes (gRPC framing, MQTT topic-maps, WebRTC SDP, unix-socket locality, store-and-forward gitbroker), each faithfully reduced to a stud: CALL or CHANNEL.
+- **`loopback`** — every delegated transport is genuinely *fireable*, own-both-ends, witnessable, with no account.
+- **The LambdaTest matrix** (`matrix`) — auth resolved below the boundary, a smoke-probe that fails early on a broken env, a bounded worker pool that respects cloud parallel limits, retries, and a non-zero exit as a CI gate.
+- **Record → replay** — per-provider specs, app inventory and upload, and a runner that materializes a neutral trace into a provider-specific replayable spec. Everything tenant-specific lives here, in the fork — never upstream.
+- **Provider-shaped auth** — the wire carries an `auth_slot`; the adapter owns what that slot means for its provider.
+
+<details><summary><b>The deeper idea — composed above the wire</b></summary>
+
+> Part of **The Wire** — a witnessed substrate for agents: **two modes** (CALL and CHANNEL) over a lean wire any mind acts on, with a witness that makes agents continuous, auditable, and federated. This repo is the **ARMS** — per-provider spec/runner/upload/catalog/composer and record→replay, composed *above* the wire. It depends on the three generic arms, one-way; they never depend on it.
 > **The four arms:** [http-mcp](https://github.com/rrrishi123/http-mcp) (WIRE) · [8](https://github.com/rrrishi123/8) (WITNESS) · [pilot](https://github.com/rrrishi123/pilot) (HOST) · [adapters](https://github.com/rrrishi123/adapters) (ARMS)
+> **Going deeper:** [TRANSPORTS.md](TRANSPORTS.md) — every transport, which mode it reduces to, and which arm owns it.
+
+</details>
 
 ---
-
 <!-- ===== SHARED TERRITORY (identical across http-mcp · 8 · pilot · adapters) ===== -->
 
 # The Wire — a witnessed substrate for agents
@@ -144,7 +173,6 @@ The model learns **only from what comes back** (afferent); nothing flows *toward
 **Act lives inside Observe** — an act is known only by observing its result. `efferent` (toward the target)
 is one leg; the model's knowledge is built from the `afferent` leg alone.
 
-
 ## Inscription is truth (what may be trusted)
 
 Only the **witnessed record** may be trusted — the ledger, `/manifest`, `/resolve`, the
@@ -166,6 +194,7 @@ findings into law across resurrections. The rule that makes this knowledge and n
 digest keeps a pointer back to the undigested record, so any claim it carries can be re-checked
 against the witness. A mind is its mantra plus its sediment, resurrected by a digest whose
 residue stays auditable.
+
 ## 8 — the witness: observe every tab, control none
 
 8 is the OODA **Observe**. It must see *all* tabs (per-tab memory/CPU/events, including itself)
@@ -273,7 +302,7 @@ flowchart TB
 
 Independent semver **per arm** + a separately-versioned **contract** (trace format, RunRequest/RunResult).
 Each arm declares which contract version it supports; the replay runner checks a trace's contract version
-before replaying. Baseline: **`v0.0.1`** across all four arms.
+before replaying. Baseline: **`v0.0.2`** across all four arms.
 
 ## Why "the wire is enough"
 
@@ -298,12 +327,27 @@ Orients/Decides, witness Observes; **Kalman observability** — you cannot contr
 
 ## Transports — the wire's extent (7 → 2)
 
-The parent Go module, including gitbroker and mqtt, uses only the standard
-library. WebRTC is a separate nested module with Pion dependencies and is an
-[experimental transport primitive](./webrtc/README.md), with an echo peer and
-no witness, policy or application authentication. `./build.sh` builds both
-modules; run Go checks from both the repository root and `webrtc/`.
-
 The full transport candidate list — **HTTP, WebSocket, SSE, MJPEG, Unix socket, gRPC, MQTT, WebRTC** — all reduce to the wire's **two atoms**: `http_request` (CALL) and `bidi_command` (CHANNEL). Raw bytes ⇒ wire; framing/routing/negotiation ⇒ adapter.
 
 → See **[TRANSPORTS.md](./TRANSPORTS.md)** for the full map (prose + Mermaid). Machine-readable: the http-mcp MCP **`transports`** tool returns [`transports.json`](https://github.com/rrrishi123/http-mcp/blob/main/contract/transports/transports.json) verbatim — the map any agent reads first.
+
+## Local stack — drivers & seats
+
+The four-arm system runs a **generic local stack** (no cloud). Two drivers bridge
+real targets to the wire, and every target becomes a **seat** on 8:
+
+| driver | bridges | seat(s) on 8 |
+|---|---|---|
+| **geckodriver** (`scripts/up.sh`) | Firefox | `fox` (CHANNEL, BiDi) + a request seat (CALL, classic WebDriver) — same browser, two physics |
+| **Appium** (`scripts/devices.sh`) | real iOS / Android | one CALL seat per connected device |
+
+`scripts/devices.sh` starts a local Appium server, enumerates connected devices
+(`adb` + libimobiledevice), creates one session per device **through the wire**
+(`http_request` POST `<hub>/session` — the CALL atom), and registers each as a
+seat. 8 then sees + drives every seat on the same call-path — `/shot` (screenshot),
+`/source` (UI tree), `/act` (W3C tap/swipe/type). The cockpit canvas lays a live
+viewport per seat; bird's-eye shows Firefox + every device at once.
+
+iOS needs WebDriverAgent signed with a provisioning profile on the device; if a
+session create fails on signing, that is the only blocker. Cloud (LambdaTest etc.)
+is a separate, vast concern handled in `adapters`, not the lean local stack.
