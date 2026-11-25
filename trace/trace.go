@@ -38,7 +38,7 @@ import (
 // this literal duplicates it because adapters is a zero-dependency module and
 // importing http-mcp/contract would add a new adapters→http-mcp module arrow.
 // Until that arrow is decided, bump BOTH in lockstep.
-const Version = "v0.0.4"
+const Version = "v0.0.5"
 
 // Compatible reports whether a trace stamped v can be replayed by this
 // package: same major.minor. A missing stamp (a pre-v0.0.2 trace) is
