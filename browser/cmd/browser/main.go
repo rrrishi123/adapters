@@ -67,7 +67,13 @@ func main() {
 		bin := fs.String("bin", "", "browser/driver binary (default: resolve from --engine)")
 		broker := fs.Int("broker", 0, "suggested channel broker port for the hint (default 4446 chrome, 4445 firefox)")
 		profile := fs.String("profile", "", "persistent profile dir (default: isolated per engine/port)")
-		headless := fs.Bool("headless", runtime.GOOS == "linux", "Chrome: no desktop/display (default true on Linux; mac cutover is explicit)")
+		// A system built to WITNESS must not boot an unwitnessable browser. Default
+		// HEADED wherever a display exists (mac always; Linux desktops like omarchy
+		// via X/Wayland), and fall back to headless only on a genuinely displayless
+		// host (CI, a server). Explicit --headless still wins. Prior default was
+		// headless on ALL Linux, which made every Linux seat invisible to the witness.
+		hasDisplay := os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
+		headless := fs.Bool("headless", runtime.GOOS == "linux" && !hasDisplay, "Chrome: no desktop/display — defaults OFF (headed/witnessable) when a display is present; ON only on a displayless host; override explicitly")
 		fs.Parse(os.Args[2:])
 		var rr *RunResult
 		var err error
